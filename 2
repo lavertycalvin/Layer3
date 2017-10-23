@@ -1,0 +1,546 @@
+#include "fish.h"
+#include "fishnode.h"
+#include <assert.h>
+#include <signal.h>
+#include <string.h>
+#include <stdlib.h>
+
+static int noprompt = 0;
+static fn_l2addr_t myAddr;
+static int num_arp_entries = 0;
+
+static int arp_table_size = 256;
+
+static fn_l2addr_t invalid;
+
+fnaddr_t *l3addr_being_resolved; //array of l3 addresses being resolved
+struct arp_entry *my_arp_cache; //holds all of the resolved arp resolutions
+struct fishnet_l2_callback *resolve_in_progress; //array of callback structs that are necessary for followup
+
+
+
+
+/* ======================= FUNCTIONS TO IMPLEMENT =========================== */
+/* ====================    For Full Functionality =========================== */
+/* call back function to decrease ttl in arp_cache */
+void decrease_arp_cache_ttl(void *whatever){
+	//fprintf(stderr, "Made it!\n");
+	for(int i = 0; i < arp_table_size; i++){
+		if((my_arp_cache[i].stored_ttl > 0)){
+			my_arp_cache[i].stored_ttl -= 1;
+			if(my_arp_cache[i].stored_ttl == 0){
+				//decrease total number of entries in the arp table
+				num_arp_entries -= 1;
+				fprintf(stderr, "Decreased number of arp entries to: %d\n", num_arp_entries);
+			}
+		}
+	}
+	/* schedule callback to this function a second from now */
+	fish_scheduleevent(DELAY_ARP_TTL, decrease_arp_cache_ttl, 0);
+}
+
+
+/* helper to pint my own arp table */
+void my_print_arp_table(){
+			fprintf(stderr, "                CUSTOM ARP TABLE                     \n"
+					"=====================================================\n"
+					"        L3 Addr              L2 Addr          TTL    \n"
+					"    ----------------   -------------------   -----   \n"
+				);
+	for(int i = 0; i < arp_table_size; i++){
+		if((my_arp_cache[i].stored_ttl != 0)){
+			fprintf(stderr, "%20s   %5s     %3d\n", 
+							fn_ntoa(my_arp_cache[i].stored_l3_addr), 
+							fnl2_ntoa(my_arp_cache[i].stored_l2_addr), 
+							my_arp_cache[i].stored_ttl);
+		}
+	}
+}
+
+
+void my_add_arp_entry(fn_l2addr_t l2addr, fnaddr_t addr, int timeout){
+	int j = 0;
+	/* check to see if we need to resize the table */
+	if(num_arp_entries >= arp_table_size){
+		fprintf(stderr, "ARP CACHE IS FULL! Reallocing...\n");
+		arp_table_size *= 2; //double the size of the arp cache
+		my_arp_cache = realloc(my_arp_cache, sizeof(struct arp_entry) * arp_table_size);
+		if(my_arp_cache == NULL){
+			fprintf(stderr, "Unable to double the size of the arp cache, exiting!\n");
+			exit(3);
+		}
+	}
+	
+	for(int i = 0; i < arp_table_size; i++){
+		if(my_arp_cache[i].stored_ttl != 0){
+			/* check to see if match */
+			if(FNL2_EQ(my_arp_cache[i].stored_l2_addr, l2addr) && ((uint32_t)addr == (uint32_t)my_arp_cache[i].stored_l3_addr)){
+				fprintf(stderr, "Found an entry already for %s in table, updating timeout to: %d\n", fnl2_ntoa(l2addr), timeout);
+				my_arp_cache[i].stored_ttl = timeout;
+				return;
+			}
+		}
+	}
+	
+	/* didn't find a match, need to add to the table */
+	fprintf(stderr, "No Match, adding to the table!\n");
+	while(my_arp_cache[j].stored_ttl != 0){ //search for open spot
+		j++;
+	}
+	/* add arp entry to the table */
+	my_arp_cache[j].stored_l2_addr = l2addr;
+	my_arp_cache[j].stored_l3_addr = addr;
+	my_arp_cache[j].stored_ttl     = timeout;
+	num_arp_entries++;	
+}
+
+
+/* checks resolution table if already in progress 
+ * - returns 0 if not in table, 
+ * - returns 1 if in table
+ *
+ * ADDED FUNCTIONALITY
+ * -if remove is true, this will set the info at the pointer back to 0
+ */
+int resolution_lookup(fnaddr_t l3addr, int remove){
+	if((l3addr == fish_getaddress()) || (l3addr == ALL_NEIGHBORS)){
+		//fprintf(stderr, "We are ignoring this node's address or all neighbors, returning immediately!\n");
+		return 1;
+	}
+	for(int i = 0; i < MAX_ADDR_RESOLVED; i++){
+		if((uint32_t)l3addr_being_resolved[i] == (uint32_t)l3addr){
+			if(remove){
+				fprintf(stderr, "Removing %s from the resoluion lookup table at location %d!\n", fn_ntoa(l3addr), i);
+				l3addr_being_resolved[i] = (fnaddr_t)0; //reset the address to invalid
+				return 1;
+			}
+			else{	
+				fprintf(stderr, "Resolution lookup says: Already being resolved!\n");
+				return 1;
+			}
+		}
+
+	}
+	fprintf(stderr, "Resolution lookup says: Not being resolved! Adding to the resolution table\n");
+	int j = 0;
+	while((uint32_t)l3addr_being_resolved[j] != 0){
+		j++;
+	}
+	l3addr_being_resolved = &l3addr; //store the address
+	fprintf(stderr, "%s stored at position %d in the table\n", fn_ntoa(l3addr), j);
+	return 0;
+}	
+
+/* checks cache for a valid entry */
+fn_l2addr_t *arp_lookup(fnaddr_t l3addr){
+	fn_l2addr_t *l2_addr_return = NULL;
+	if(l3addr == ALL_NEIGHBORS){
+		return &ALL_L2_NEIGHBORS;
+	}
+	/* do we look up our own? */
+	if(l3addr == fish_getaddress()){
+		return &myAddr;
+	}
+	for(int i = 0; i < arp_table_size; i++){
+		if((my_arp_cache[i].stored_l3_addr == l3addr) && (my_arp_cache[i].stored_ttl != 0)){
+			return &my_arp_cache[i].stored_l2_addr;
+		}
+	}
+	fprintf(stderr, "Unable to find in function: arp_lookup, returning NULL\n");
+	return l2_addr_return;
+}
+
+/* resolve the dest and then compute the checksum */
+void my_arp_dest_resolution_cb(fn_l2addr_t addr, void *param){
+	struct fishnet_l2_header *l2_header = (struct fishnet_l2_header *)param;
+	if(FNL2_VALID(addr)){
+		l2_header->dest         = addr;
+		l2_header->checksum     = 0;	
+  		l2_header->checksum 	= in_cksum(l2_header, ntohs(l2_header->length)); //have to call after the address is resolved
+		fish_l1_send(l2_header);
+		free(param);
+	}
+	else{
+		fprintf(stderr, "L3 addr was not resolved/not valid. Dropping\n");
+		free(param);
+	}
+}
+
+/* follow up function from resolve fnaddr (callback from schedule event)*/
+void resolve_followup(void *param){
+	/* param holds:
+	 * - the amount of times it has tried to resolve the address
+	 * - the packet
+	 * - the lvl 3 address trying to be resolved
+	 * - the callback function necessary to call when resolved
+	 */
+	struct fishnet_l2_callback *cb_struct = (struct fishnet_l2_callback *)param;
+	if(cb_struct->times_resolved == 0){
+		fprintf(stderr, "Tried to resolve too many times, passing with invalid l2 address!\n");
+		cb_struct->cb_func(invalid, cb_struct->packet);
+	}
+	else{
+		fprintf(stderr, "Decrementing times resolved for address %s!\n", fn_ntoa(*(cb_struct->l3addr)));
+		cb_struct->times_resolved -= 1;
+		fn_l2addr_t *resolved_l2_addr = arp_lookup(*(cb_struct->l3addr));
+		if(resolved_l2_addr != NULL){
+			fprintf(stderr, "%s was found in Followup func, calling callback immediately!\n", fnl2_ntoa(*resolved_l2_addr));
+			fprintf(stderr, "Removing the l3addr from resolve_in_progress\n");
+			resolution_lookup(*(cb_struct->l3addr), 1);
+			cb_struct->cb_func(*resolved_l2_addr, cb_struct->packet);
+		}
+		else{
+			fprintf(stderr, "Not found in the arp cache... Will follow up again in a few...\n");	
+			fish_scheduleevent(DELAY_ARP_RESOLVE, resolve_followup, cb_struct);
+			/* if the struct is the designated as the request sender, send the request again */
+			if(cb_struct->send_request == 1){
+				fprintf(stderr, "Designated to send another arp request! Sending...\n");
+				fish_arp.send_arp_request(*(cb_struct->l3addr));
+			}
+		}
+	}
+}
+
+/* this function resolves a L3 address into the corresponding L2 address */
+void my_resolve_fnaddr(fnaddr_t addr, arp_resolution_cb cb, void *param){
+      	/* if address is cached and hasn't expired, call cb immediately with the mapping */
+	int designated_requester = 0; //if this packet is meant to call send_arp_request
+	fn_l2addr_t *resolved_l2_addr = arp_lookup(addr);
+	if(resolved_l2_addr != NULL){
+		//fprintf(stderr, "%s was cached, calling callback immediately!\n", fnl2_ntoa(*resolved_l2_addr));
+		/* how do we return the mapped address to the callback function??? */
+		resolution_lookup(addr, 1);
+		cb(*resolved_l2_addr, param);
+		return;
+	}
+
+
+	/* if address is NOT already being resolved, elicit an arp request */
+	if(resolution_lookup(addr, 0)){
+		/* arp lookup initiated by fish_arp.send_arp_request */
+		fprintf(stderr, "Initiating ARP lookup for addr: %s\n", fn_ntoa(addr));
+		fish_arp.send_arp_request(addr);
+		/* designate this packet to be the one to send the next arp requests as well */
+		designated_requester = 1;
+	}
+	/* address is already being resolved, create a callback to followup for sending */
+	/* A resolution (arp request) is attempted exactly 4 times, with 2.5 seconds in between
+	 * attempts. After the fourth non-response (which will occur 10 seconds after the first request), the L3 address
+	 * is assumed to be unreachable and all queued frames for that address are dropped.
+	 */
+	fprintf(stderr, "Address %s is in process of being resolved... following up later.\n", fn_ntoa(addr));	
+	struct fishnet_l2_callback *cb_struct = malloc(sizeof(struct fishnet_l2_callback));
+	cb_struct->l3addr 		= &addr;
+	cb_struct->packet 		= param;
+	cb_struct->cb_func 		= cb;
+	cb_struct->times_resolved 	= 3; //already tried to resolve once?
+	cb_struct->send_request 	= designated_requester;
+	fish_scheduleevent(DELAY_ARP_RESOLVE, resolve_followup, cb_struct);	
+}	
+
+
+/* ======================= For Basic Functionality ========================== */
+//NOTE: fn_l2addr_t ALL_L2_NEIGHBORS --- global that holds the L2 broadcast address
+
+//Receives a new layer 2 frame from the layer 1 code in libfish. Decapsulates the frame and passes it up the stack as needed
+int my_fishnode_l2_receive(void *l2frame){
+	int ret = 1;
+	struct fishnet_l2_header *l2Header = (struct fishnet_l2_header *)l2frame;
+
+	//return false if the send is know to have failed and true otherwise
+	/* RESPONSIBILITY:
+	 * - Decapsulating frame and passing up stack via fish_l3.fish_l3_receive
+	 */
+	
+	/* FUNCTIONALITY 1: Drop frames with Invalid Checksums */
+	if(0 != in_cksum(l2Header, ntohs(l2Header->length))){
+		fprintf(stderr, "INVALID CHECKSUM! Drop it like it's hot.\n");	
+		ret = 0;
+	}
+	
+	/* FUNCTIONALITY 2: Drop frames not for this node (verify l2 address)*/
+	if((ret == 1) && (FNL2_EQ(l2Header->dest, myAddr) || FNL2_EQ(l2Header->dest, ALL_L2_NEIGHBORS))){
+		/* NOW Peek into the l3 header to see if arp protocol */
+		if((uint32_t)((uint8_t *)l2frame)[L2_OFFSET_TO_L3_PROTO] == ARP_PROTO){
+			fish_arp.arp_received(l2frame);
+		}
+		
+		/* FUNCTIONALITY 3: Decapsulate and pass up the stack via fish_l3.fish_l3_receive*/
+		l2frame += L2_HEADER_LENGTH; //increment over the length of the header to point to start of l3frame	
+		ret = fish_l3.fish_l3_receive(l2frame, ntohs(l2Header->length) - L2_HEADER_LENGTH); //two parameters: void *l3frame, int len
+	}
+	else{
+		//Also drop it like it's hot
+		ret = 0;
+	}
+	
+	return ret;
+}
+
+/* make a new callback function which takes two parameters and unpack them */
+void my_arp_resolution_cb(fn_l2addr_t addr, void *param){
+	/*unpack param into the address and the packet */
+
+	struct fishnet_l2_header *l2_header = (struct fishnet_l2_header *)param;
+	if(FNL2_VALID(addr)){
+		l2_header->dest         = addr;
+		l2_header->checksum     = 0;	
+  		l2_header->checksum 	= in_cksum(l2_header, ntohs(l2_header->length)); //have to call after the address is resolved
+		fish_l1_send(l2_header);
+		free(l2_header);
+		free(param);
+	}
+	else{
+		fprintf(stderr, "L3 addr was not resolved/not valid. Dropping\n");
+		free(l2_header);
+		free(param);
+	}
+}
+
+//Receives a new L3 frame to be sent over the network
+int my_fish_l2_send(void *l3frame, fnaddr_t next_hop, int len){
+	/*Functionality 1: Add l2 header to frame */
+	void *l2frame = malloc(sizeof(struct fishnet_l2_header) + len);
+	if(l2frame == NULL){
+		fprintf(stderr, "Failed to malloc for function: my_fish_l2_send\n");
+	}
+	l2frame += L2_HEADER_LENGTH; //move the pointer to start of l3 header
+	memcpy(l2frame, l3frame, len);
+ 	l2frame -= L2_HEADER_LENGTH; //move back to the original spot
+	
+	struct fishnet_l2_header *l2_header = (struct fishnet_l2_header *)l2frame;
+	l2_header->length 	= htons(L2_HEADER_LENGTH + len); //add the length of the new header
+	l2_header->source 	= myAddr; //is this right?
+	/* FUNCTIONALITY 2: Resolve L3 Address via ARP cache */
+	struct fishnet_l2_callback *stored_cb = malloc(sizeof(struct fishnet_l2_callback));
+	if(stored_cb == NULL){
+		fprintf(stderr, "Unable to malloc for the 'fishnet_l2_calback' struct. Exiting!\n");
+		exit(5);
+	}
+	fish_arp.resolve_fnaddr(next_hop, my_arp_dest_resolution_cb, l2frame); 	
+	return 0;
+	/* FUNCTIONALITY 3: Call fish_l1_send() in callback function */
+}
+
+
+//arp implementations
+void send_arp_response(fnaddr_t dest){
+	/* malloc enough space for lvls 2-4 */
+	void *arp_frame = malloc(sizeof(struct fishnet_arp_header) + L2_OFFSET_TO_L4);
+	arp_frame += L2_OFFSET_TO_L4;
+	struct fishnet_arp_header *arp = (struct fishnet_arp_header *)arp_frame;
+	if(arp == NULL){
+		fprintf(stderr, "Failed to malloc for function: send_arp_response\n");
+	}
+
+	arp->query_type      = htonl(ARP_REPLY);
+	arp->queried_l3_addr = fish_getaddress();
+	arp->l2_addr_for_l3  = fish_getl2address(); //should work, but not checked
+	
+	fish_l3.fish_l3_send(arp_frame, ARP_HEADER_LENGTH, dest, ARP_PROTO, ARP_TTL);
+}
+
+//This function pointer gets called when an ARP frame arrives at the node for processing
+void my_arp_received(void *l2frame){
+	
+	l2frame += L2_OFFSET_TO_L3_SOURCE;
+	fnaddr_t arp_dest = *(fnaddr_t *)l2frame;	
+	l2frame -= L2_OFFSET_TO_L3_SOURCE;
+
+	l2frame = l2frame + L2_OFFSET_TO_L4; //move our pointer to get to beginning of arp header
+	struct fishnet_arp_header *arp_header = (struct fishnet_arp_header *)l2frame;	
+
+	/* check to see if this is a response or a request */
+	if(arp_header->query_type == htonl(ARP_REQUEST)){
+		//need to know own if they are asking for our l3 Address
+		if(arp_header->queried_l3_addr == fish_getaddress()){
+			//send arp response
+			l2frame = l2frame - L2_OFFSET_TO_L4; //move our pointer to get to beginning of arp header
+			send_arp_response(arp_dest);
+		}
+	}
+	else{
+		fish_arp.add_arp_entry(arp_header->l2_addr_for_l3, arp_header->queried_l3_addr, 180); //what is the TTL?
+		my_add_arp_entry(arp_header->l2_addr_for_l3, arp_header->queried_l3_addr, 180);
+	}
+}	
+
+void my_send_arp_request(fnaddr_t l3addr){
+	/* malloc enough space for lvls 2-4 */
+	void *arp_frame = malloc(sizeof(struct fishnet_arp_header) + L2_OFFSET_TO_L4);
+	arp_frame += L2_OFFSET_TO_L4;
+	struct fishnet_arp_header *arp = (struct fishnet_arp_header *)arp_frame;
+	if(arp == NULL){
+		fprintf(stderr, "Failed to malloc for function: my_send_arp_request\n");
+	}
+
+	arp->query_type      = htonl(ARP_REQUEST);
+	arp->queried_l3_addr = l3addr;
+	arp->l2_addr_for_l3  = ALL_L2_NEIGHBORS; //doesn't matter what is here, it isn't checked
+	
+	fish_l3.fish_l3_send(arp_frame, ARP_HEADER_LENGTH, ALL_NEIGHBORS, ARP_PROTO, ARP_TTL);
+}
+
+/* ======================== END OF FUNCTIONS TO IMPLEMENT ============================ */
+
+void sigint_handler(int sig)
+{
+   if (SIGINT == sig)
+	   fish_main_exit();
+}
+
+static void keyboard_callback(char *line)
+{
+   if (0 == strcasecmp("show neighbors", line))
+      fish_print_neighbor_table();
+   else if (0 == strcasecmp("show arp", line)){ //edited for my own table
+      fish_print_arp_table();
+      my_print_arp_table();
+   }
+   else if (0 == strcasecmp("show route", line))
+      fish_print_forwarding_table();
+   else if (0 == strcasecmp("show dv", line))
+      fish_print_dv_state();
+   else if (0 == strcasecmp("quit", line) || 0 == strcasecmp("exit", line))
+      fish_main_exit();
+   else if (0 == strcasecmp("show topo", line))
+      fish_print_lsa_topo();
+   else if (0 == strcasecmp("help", line) || 0 == strcasecmp("?", line)) {
+      printf("Available commands are:\n"
+             "    exit                         Quit the fishnode\n"
+             "    help                         Display this message\n"
+             "    quit                         Quit the fishnode\n"
+             "    show arp                     Display the ARP table\n"
+             "    show dv                      Display the dv routing state\n"
+             "    show neighbors               Display the neighbor table\n"
+             "    show route                   Display the forwarding table\n"
+             "    show topo                    Display the link-state routing\n"
+             "                                 algorithm's view of the network\n"
+             "                                 topology\n"
+             "    ?                            Display this message\n"
+            );
+   }
+   else if (line[0] != 0)
+      printf("Type 'help' or '?' for a list of available commands.  "
+             "Unknown command: %s\n", line);
+
+   if (!noprompt)
+      printf("> ");
+
+   fflush(stdout);
+}
+
+int main(int argc, char **argv)
+{
+	struct sigaction sa;
+   	int arg_offset = 1;
+
+   	/* set functions to my custom pointers */
+	fish_l2.fishnode_l2_receive = my_fishnode_l2_receive;
+	fish_l2.fish_l2_send        = my_fish_l2_send;
+	fish_arp.arp_received       = my_arp_received;	
+	fish_arp.send_arp_request   = my_send_arp_request;
+
+	fish_arp.resolve_fnaddr   = my_resolve_fnaddr;
+	fish_arp.add_arp_entry    = my_add_arp_entry;
+	
+	/* Verify and parse the command line parameters */
+	if (argc != 2 && argc != 3 && argc != 4)
+	{
+		printf("Usage: %s [-noprompt] <fishhead address> [<fn address>]\n", argv[0]);
+		return 1;
+	}
+
+   	if (0 == strcasecmp(argv[arg_offset], "-noprompt")) {
+      		noprompt = 1;
+      		arg_offset++;
+   	}
+
+   	/* Install the signal handler */
+	sa.sa_handler = sigint_handler;
+	sigfillset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	if (-1 == sigaction(SIGINT, &sa, NULL))
+	{
+		perror("Couldn't set signal handler for SIGINT");
+		return 2;
+	}
+
+   	/* Set up debugging output */
+//#ifdef DEBUG
+	fish_setdebuglevel(FISH_DEBUG_ALL);
+//#else
+	//fish_setdebuglevel(FISH_DEBUG_NONE);
+//#endif
+	fish_setdebugfile(stderr);
+
+   	/* Join the fishnet */
+	if (argc-arg_offset == 1)
+		fish_joinnetwork(argv[arg_offset]);
+	else
+		fish_joinnetwork_addr(argv[arg_offset], fn_aton(argv[arg_offset+1]));
+
+   	/* Install the command line parsing callback */
+   	fish_keybhook(keyboard_callback);
+   	if (!noprompt)
+      	printf("> ");
+   	fflush(stdout);
+
+   	/* Enable the built-in neighbor protocol implementation.  This will discover
+    	 * one-hop routes in your fishnet.  The link-state routing protocol requires
+   	 * the neighbor protocol to be working, whereas it is redundant with DV.
+   	 * Running them both doesn't break the fishnode, but will cause extra routing
+   	 * overhead */
+   	fish_enable_neighbor_builtin( 0
+   	      | NEIGHBOR_USE_LIBFISH_NEIGHBOR_DOWN
+   	);
+
+   	/* Enable the link-state routing protocol.  This requires the neighbor
+    	 * protocol to be enabled. */
+   	fish_enable_lsarouting_builtin(0);
+
+   	/* Full-featured DV routing.  I suggest NOT using this until you have some
+    	 * reasonable expectation that your code works.  This generates a lot of
+    	 * routing traffic in fishnet */
+
+   	//fish_enable_dvrouting_builtin( 0
+   	//     | DVROUTING_WITHDRAW_ROUTES
+         //| DVROUTING_TRIGGERED_UPDATES
+   	//     | RVROUTING_USE_LIBFISH_NEIGHBOR_DOWN
+   	//     | DVROUTING_SPLIT_HOR_POISON_REV
+   	//     | DVROUTING_KEEP_ROUTE_HISTORY
+   	// );
+
+   	/* get our l2_addr */
+	myAddr = fish_getl2address();
+	fish_scheduleevent(DELAY_ARP_TTL, decrease_arp_cache_ttl, 0);
+
+	/*set up invalid l2 address */
+	invalid.l2addr[0] = 0;
+	invalid.l2addr[1] = 0;
+	invalid.l2addr[2] = 0;
+	invalid.l2addr[3] = 0;
+	invalid.l2addr[4] = 0;
+	invalid.l2addr[5] = 0;
+	
+	/* initialize our l3 address resolution table */
+	l3addr_being_resolved = calloc(256, sizeof(fnaddr_t));
+
+
+	/* initialize arp cache */
+	static int arp_table_size = 256;
+
+	my_arp_cache = calloc(arp_table_size, sizeof(struct arp_entry));
+	/* Execute the libfish event loop */
+	fish_main();
+
+   	/* Clean up and exit */
+  	if (!noprompt)
+      	printf("\n");
+
+	printf("Fishnode exiting cleanly.\n");
+	free(my_arp_cache);
+	free(l3addr_being_resolved);
+	return 0;
+}
+
