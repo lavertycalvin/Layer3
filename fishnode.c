@@ -74,20 +74,49 @@ void generate_fcmp(uint32_t error, uint32_t id, fnaddr_t packet_dest){
 //TO DO
 int received_previously(fnaddr_t source, uint32_t packet_id){
 	int ret = 0;
-	fprintf(stderr, "LMAOOOO. How do we check if we have received_previously?????\n");
+	//fprintf(stderr, "LMAOOOO. How do we check if we have received_previously?????\n");
 	if(source == ALL_NEIGHBORS){
-		fprintf(stderr, "Source address was broadcast, not forwarding!\n");
+		//fprintf(stderr, "Source address was broadcast, not forwarding!\n");
 		ret = 1;
 	}
 	else if(source == fish_getaddress()){
-		fprintf(stderr, "Source address was mine, so we have received previously!\n");
+		//fprintf(stderr, "Source address was mine, so we have received previously!\n");
 		ret = 1;
 	}
 	
 	return ret;
 }
 
-/* =================== Basic Implementation ================*/
+/* ============== Basic DV Routing Implementation ========== */ 
+void process_dv_packet(void *dv_frame, int len){
+	fprintf(stderr, "\nPlease send help, I haven't implemented dv routing yet!\n");
+	fprintf(stderr, "\tLength of the DV Packet is: %d\n", len);
+	struct dv_packet *dv = (struct dv_packet *)dv_frame;
+	fprintf(stderr, "\tNumber of adv in this packet: %d\n", ntohs(dv->num_adv));
+	int i = 0;
+
+	struct dv_adv *advertisement = &dv->adv_packets; //set the advertisement to point to the packets 
+	while(i < ntohs(dv->num_adv)){
+		/* calc the netmask */
+		/* check out the metric */
+		/*
+		 */
+		fprintf(stderr, "\tAdvertisement number %d:\n"
+				"\t\tDest is: %s\n"
+				"\t\tNetmask: %s\n"
+				"\t\tMetric : %d\n",
+				i,
+				fn_ntoa(advertisement->dest),
+				fn_ntoa((fnaddr_t)advertisement->netmask),
+				ntohl(advertisement->metric));
+		advertisement++;
+		i++;
+		
+	}
+}
+
+
+/* =================== Basic Implementation ================ */
 int my_fishnode_l3_receive(void *l3frame, int len){
 	/* Future:
 	 * 	Call implementation of fishnet l3 protocols such as DV routing
@@ -99,23 +128,37 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	fnaddr_t src   = l3_header->src;
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
-		fprintf(stderr, "This packet is meant for me!\n");
+		//fprintf(stderr, "This packet is meant for me!\n");
+		
+		/* check if dv packet */
+		if(l3_header->proto == L3_PROTO_DV){
+			l3_header++; //move pointer to l3 header along
+			process_dv_packet(l3_header, len - L3_HEADER_LENGTH);	
+			l3_header--;
+		}	
 		l3_header++; //move pointer to l3 header along
-		fish_l4.fish_l4_receive(l3_header, len, proto, src); 
+		fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
 	}
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
+		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
 		/* and received by node previously, drop with no FCMP message */
 		if(received_previously(l3_header->src, l3_header->id)){
 			fprintf(stderr, "Received previously. Dropping packet!\n");
-			//free(l3frame);
 		}
 		/* frame passed up network stack and forwarded back out over fishnet with decremented ttl */
 		else{
 			fprintf(stderr, "Not received previously. Forwarding out to fishnet with decremented TTL\n");
+			
+			if(l3_header->proto == L3_PROTO_DV){
+				l3_header++; //move pointer to l3 header along
+				fprintf(stderr, "Received a DV packet broadcast to all nodes\n");
+				process_dv_packet(l3_header, len - L3_HEADER_LENGTH);	
+				l3_header--;
+			}	
+			
 			l3_header++; //move pointer to l3 header along
-			ret = fish_l4.fish_l4_receive(l3_header, len, proto, src); //pass up network stack
+			ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); //pass up network stack
 			l3_header--; //move pointer back to original position
 			l3_header->ttl -= 1; //decrement ttl
 			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	        	
@@ -133,7 +176,14 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, uint8_t ttl){
 	int ret = 1;
 	
-	void *l3frame = l4frame + L3_HEADER_LENGTH;
+	void *l3frame = malloc(sizeof(struct fishnet_l3_header) + len);
+	if(l3frame == NULL){
+		fprintf(stderr, "Failed to malloc for function: my_fish_l3_send\n");
+	}
+	l3frame += L3_HEADER_LENGTH; //move the pointer to start of l3 header
+	memcpy(l3frame, l4frame, len);
+ 	l3frame -= L3_HEADER_LENGTH; //move back to the original spot
+	
         struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 	
 	l3_header->ttl   = ttl;
@@ -141,15 +191,17 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
         l3_header->id    = htonl(fish_next_pktid());
 	l3_header->src   = fish_getaddress(); 
 	l3_header->dest  = dst_addr;
+	
+	//fish_debugframe(7, "SEND THING", l3frame, 3, len + L3_HEADER_LENGTH, 9);
 
-	ret = fish_l3.fish_l3_forward(l3frame, len);	
+	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
 	return ret;
 }
 
 int is_local(fnaddr_t l3_dest){
 	/* returns 1 if local, 0 if not */
 	int ret = 0;
-	if(l3_dest != fish_getaddress()){
+	if(l3_dest == fish_getaddress()){
 		//fprintf(stderr, "Not local (not for us)\n");
 		ret = 1;
 	}
@@ -159,32 +211,40 @@ int is_local(fnaddr_t l3_dest){
 int my_fish_l3_forward(void *l3frame, int len){
 	int ret = 1;
 	uint32_t fcmp_error = 0;
+	fnaddr_t next_hop = (fnaddr_t)0;
 	/* NOTE: original frame memory must not be modified */
         struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 
 	/* if TTL is 0 and the dest is not local, drop packet and generate FCMP error message */
 	if((l3_header->ttl == 0) && !is_local(l3_header->dest)){
-		fprintf(stderr, "TTL is 0 and dest is not local! Generating FCMP packet...\n");
+		//fprintf(stderr, "TTL is 0 and dest is not local! Generating FCMP packet...\n");
 		fcmp_error = htonl(FCMP_TTL_EXCEEDED);
 		generate_fcmp(fcmp_error, l3_header->id, l3_header->src);
-		//free(l3frame);
 		ret = 0;	
 	}	
 	/* lookup l3 dest in the forwarding table */
-	fnaddr_t next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
+	//fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
+	
+	/* check to see if the dest is broadcast, then we dont have to look up */
+	if(l3_header->dest != ALL_NEIGHBORS){
+		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
+	}
+	else{
+		next_hop = ALL_NEIGHBORS;
+	}
 	/* if there is no route to the destination, drop the frame and generate correct FCMP error message */
-	if((ret != 0) && (next_hop == 0)){
-		fprintf(stderr, "No route to the destination. Dropping Frame!\n");
+	if((ret != 0) && ((uint32_t)next_hop == 0)){
+		//fprintf(stderr, "No route to the destination. Next hop is: %s. Dropping Frame!\n", fn_ntoa(next_hop));
 		fcmp_error = htonl(FCMP_NET_UNREACHABLE);
 		generate_fcmp(fcmp_error, l3_header->id, l3_header->src);
-		//free(l3frame);
 		ret = 0;
 
 	}
 	/* use fish_l2_send to send the frame to the next-hop neighbor indicated by the forwarding table */
 	if(ret != 0){
-		/* hey! we can send this to l2_send! */
-		//might not be the right length tbh
+		//get that debug statement in there!!!!!
+		//fish_debugframe(7, "TEMP THING", l3frame, 3, len + L3_HEADER_LENGTH, 9);
+		fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
 		fish_l2.fish_l2_send(l3frame, next_hop, len); 
 	}
 	return ret;
@@ -225,10 +285,11 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 	my_forwarding_table[j].user_data     = user_data;
 
 	num_forwarding_table_entries++;
-	return (void *)1;//this is wrong fo sho.
+	return (void *)1;//PLS DONT RETURN 1.
 }
 
 void *my_remove_fwtable_entry(void *route_key){
+	fprintf(stderr, "Removing an entry from the forwarding table!\n");
 	int i = 0;
 	/* this is definitely not going to work! */
 	while(my_forwarding_table[i].route_key != route_key){
@@ -256,6 +317,7 @@ int my_update_fwtable_metric(void *route_key, int new_metric){
 
 /* return the best next hop for the proposed address */
 fnaddr_t my_longest_prefix_match(fnaddr_t addr){
+	fprintf(stderr, "Looking for the best next hop!\n");
 	fnaddr_t best_match = (fnaddr_t)htonl(0);
 	int i = 0, mask = 0, best_match_length = 0, match_length = 0;
 	
@@ -307,8 +369,10 @@ static void keyboard_callback(char *line)
    else if (0 == strcasecmp("show arp", line)){ //edited for my own table
       fish_print_arp_table();
    }
-   else if (0 == strcasecmp("show route", line))
+   else if (0 == strcasecmp("show route", line)){
       fish_print_forwarding_table();
+      print_my_forwarding_table(); //try out my own implementation
+   }
    else if (0 == strcasecmp("show dv", line))
       fish_print_dv_state();
    else if (0 == strcasecmp("quit", line) || 0 == strcasecmp("exit", line))
@@ -346,8 +410,8 @@ int main(int argc, char **argv)
    	int arg_offset = 1;
 
    	/* set functions to my custom pointers */
-	//fish_l3.fish_l3_send = my_fish_l3_send;
-	//fish_l3.fishnode_l3_receive = my_fishnode_l3_receive;
+	fish_l3.fish_l3_send = my_fish_l3_send;
+	fish_l3.fishnode_l3_receive = my_fishnode_l3_receive;
 	fish_l3.fish_l3_forward = my_fish_l3_forward;
 
 	/* Verify and parse the command line parameters */
@@ -409,17 +473,17 @@ int main(int argc, char **argv)
     	 * reasonable expectation that your code works.  This generates a lot of
     	 * routing traffic in fishnet */
 
-   	//fish_enable_dvrouting_builtin( 0
-   	 //    | DVROUTING_WITHDRAW_ROUTES
+   	fish_enable_dvrouting_builtin( 0
+   	     | DVROUTING_WITHDRAW_ROUTES
          //| DVROUTING_TRIGGERED_UPDATES
-   	 //    | RVROUTING_USE_LIBFISH_NEIGHBOR_DOWN
-   	 //    | DVROUTING_SPLIT_HOR_POISON_REV
-   	 //    | DVROUTING_KEEP_ROUTE_HISTORY
-   	//);
+   	     | RVROUTING_USE_LIBFISH_NEIGHBOR_DOWN
+   	     | DVROUTING_SPLIT_HOR_POISON_REV
+   	     | DVROUTING_KEEP_ROUTE_HISTORY
+   	);
 
 
 	/* initialize our forwarding table */
-	my_forwarding_table = malloc(sizeof(struct forwarding_table_entry) * 256);
+	my_forwarding_table = calloc(sizeof(struct forwarding_table_entry), 256);
 	if(my_forwarding_table == NULL){
 		fprintf(stderr, "Unable to initialize forwarding table with 256 entries! Exiting!\n");
 		exit(52);

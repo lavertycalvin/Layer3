@@ -55,6 +55,18 @@ struct forwarding_table_entry{
 	void *		user_data;
 };
 
+struct dv_adv{
+	fnaddr_t 	dest;
+	uint32_t 	netmask;
+	uint32_t 	metric;
+}__attribute__((packed));
+
+struct dv_packet{
+	uint16_t 	num_adv;
+	struct dv_adv 	adv_packets; //could be multiple depending on num_adv
+}__attribute__((packed));
+
+
 
 /* functions */
 
