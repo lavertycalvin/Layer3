@@ -6,10 +6,15 @@
 #include <stdint.h>
 
 /* constants */
+#define MAX_IDS_SEEN 256
+
+
 #define L2_HEADER_LENGTH 16 	//in bytes -- constant
 #define L3_HEADER_LENGTH 14 	//in bytes -- constant
 
 #define FCMP_LENGTH 	 8
+#define NEIGH_LENGTH     2
+#define BLANK_DV_ADV     2
 
 /* Possible protos for l3_header */
 #define L3_PROTO_ECHO 	2
@@ -24,11 +29,16 @@
 #define FCMP_NET_UNREACHABLE  2
 #define FCMP_HOST_UNREACHABLE 3
 
-
-#define FCMP_PROTO 8 
-
+/* neighbor types */
+#define NEIGH_REQUEST  1
+#define NEIGH_RESPONSE 2
+#define NEIGH_TTL      1
 
 /* structs */
+struct neighbor_header{
+	uint16_t 	type;
+}__attribute__((packed));
+
 
 struct fishnet_l3_header{
 	uint8_t 	ttl;
@@ -51,13 +61,14 @@ struct forwarding_table_entry{
 	int 		metric;
 	int	 	prefix_length;
 	int 		pkt_count; //why
+	uint8_t 	is_best; //printing ">" for some reason
 	void *		route_key;
 	void *		user_data;
 };
 
 struct dv_adv{
 	fnaddr_t 	dest;
-	uint32_t 	netmask;
+	fnaddr_t 	netmask;
 	uint32_t 	metric;
 }__attribute__((packed));
 

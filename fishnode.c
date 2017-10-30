@@ -9,20 +9,26 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* =================== Global Vars =========================*/
+/* ========================================================= */
+/* =================== Global Vars ========================= */
+/* ========================================================= */
 static int noprompt = 0;
 int num_forwarding_table_entries = 0;
 int my_forwarding_table_size = 0;
-
+int num_packet_ids_stored = 0;
 
 struct forwarding_table_entry *my_forwarding_table;
+void *stored_route_keys;
+uint32_t *packet_ids_seen;
 
-/* =================== Helper functions! ================== */
+/* ========================================================= */
+/* =================== Helper functions! =================== */
+/* ========================================================= */
 void print_my_forwarding_table(){
-	fprintf(stderr, ""
+	fprintf(stdout, ""
 	"                    CUSTOM FORWARDING TABLE                      \n"
-	"    C = Connected, L = Loopback, N = Broadcast                   \n"
-	" B = Neighbor, D = Distance-Vector, Z = Link-State,              \n"
+	"    C = Connected, L = Loopback, B = Broadcast                   \n"
+	"  N = Neighbor, D = Distance-Vector, Z = Link-State,             \n"
 	"                      > = Best                                   \n"
 	"=================================================================\n"
 	" T      Destination            Next Hop       Metric   Pkt Cnt   \n"
@@ -31,8 +37,9 @@ void print_my_forwarding_table(){
 	int i = 0;
 	for(; i < my_forwarding_table_size; i++){
 		if(my_forwarding_table[i].valid){ //only print if valid
-			fprintf(stderr, " %c %20s/%d %20s %4d %4d  \n",
+			fprintf(stdout, " %c%c %16s/%d %19s   %6d    %6d  \n",
 				my_forwarding_table[i].type,
+				my_forwarding_table[i].is_best,
 				fn_ntoa(my_forwarding_table[i].dest),
 				my_forwarding_table[i].prefix_length,
 				fn_ntoa(my_forwarding_table[i].next_hop),
@@ -42,9 +49,12 @@ void print_my_forwarding_table(){
 	}
 }
 
+/* resize forwarding table, exit if unable to malloc for more space
+ * DOUBLES in size each time!
+ */
 void resize_forwarding_table(){
 	my_forwarding_table_size *= 2;
-	fprintf(stderr, "We have to resize our forwarding table. Doubling the size to %d entries!\n", my_forwarding_table_size);
+	//fprintf(stderr, "We have to resize our forwarding table. Doubling the size to %d entries!\n", my_forwarding_table_size);
 	my_forwarding_table = realloc(my_forwarding_table, sizeof(struct forwarding_table_entry) * my_forwarding_table_size);
 	if(my_forwarding_table == NULL){
 		fprintf(stderr, "Unable to double the size of the forwarding table, exiting!\n");
@@ -52,8 +62,40 @@ void resize_forwarding_table(){
 	}
 }
 
+void clear_packet_id_table(){
+	free(packet_ids_seen);
+	packet_ids_seen = calloc(sizeof(uint32_t), 512);
+	if(packet_ids_seen == NULL){
+		fprintf(stderr, "Unable to re-initialize packet ids seen array with 512 entries! Exiting!\n");
+		exit(53);
+	}
+	num_packet_ids_stored = 0;
+
+}
+
+void add_id_seen(uint32_t id){
+	if(num_packet_ids_stored == MAX_IDS_SEEN){
+		clear_packet_id_table();
+	}	
+	packet_ids_seen[num_packet_ids_stored] = id;
+	num_packet_ids_stored++;	
+}
+
+/* checks to see if the id is seen, returns 1 if already stored, 0 otherwise */
+uint8_t check_id_seen(uint32_t id){
+	uint8_t ret = 0;
+	int i = 0;
+	for(; i < num_packet_ids_stored; i++){
+		if(packet_ids_seen[i] == id){
+			//fprintf(stderr, "Definitely already saw this packet.....\n");
+			ret = 1;
+		}
+	}
+	return ret;
+}
+
+/* generate fcmp messages to the correct place! */
 void generate_fcmp(uint32_t error, uint32_t id, fnaddr_t packet_dest){
-	/* generated fcmp messages to the correct place! */
 	/* both id and error are already passed in in network order */
 	void *l4frame;
 	//malloc for entire packet
@@ -68,92 +110,280 @@ void generate_fcmp(uint32_t error, uint32_t id, fnaddr_t packet_dest){
 	fcmp_header->seq_num = id;
 	l4frame = fcmp_header; //set the l4frame pointer to the correct place
 
-	fish_l3.fish_l3_send(l4frame, FCMP_LENGTH, packet_dest, FCMP_PROTO, MAX_TTL); 
+	fish_l3.fish_l3_send(l4frame, FCMP_LENGTH, packet_dest, L3_PROTO_FCMP, MAX_TTL); 
 }
 
-//TO DO
 int received_previously(fnaddr_t source, uint32_t packet_id){
 	int ret = 0;
-	//fprintf(stderr, "LMAOOOO. How do we check if we have received_previously?????\n");
 	if(source == ALL_NEIGHBORS){
+		/*check to see if we already recieved this packet id! */
+		ret = check_id_seen(packet_id);
 		//fprintf(stderr, "Source address was broadcast, not forwarding!\n");
-		ret = 1;
 	}
 	else if(source == fish_getaddress()){
-		//fprintf(stderr, "Source address was mine, so we have received previously!\n");
+		//fprintf(stderr, "Source address was mine, so no need to forward!!\n");
 		ret = 1;
 	}
-	
+	else{
+		//fprintf(stderr, "Source was not us or broadcast.... is that right?\n");
+		ret = check_id_seen(packet_id);
+	}
 	return ret;
 }
 
-/* ============== Basic DV Routing Implementation ========== */ 
-void process_dv_packet(void *dv_frame, int len){
-	fprintf(stderr, "\nPlease send help, I haven't implemented dv routing yet!\n");
-	fprintf(stderr, "\tLength of the DV Packet is: %d\n", len);
-	struct dv_packet *dv = (struct dv_packet *)dv_frame;
-	fprintf(stderr, "\tNumber of adv in this packet: %d\n", ntohs(dv->num_adv));
-	int i = 0;
+/* takes in the netmask ALREADY IN HOST ORDER and calculates the prefix length */
+int find_prefix_length(uint32_t netmask){
+	//fprintf(stderr, "Calculating prefix length for %s!!!!\n", fn_ntoa(htonl(netmask)));
+	int length = 0;
+	while(netmask > 0){
+		netmask = netmask >> 1;
+		length++;
+	}	
+	//fprintf(stderr, "\tPrefix length is %d\n", length);
+	return length;
+}
 
+/* takes in a destination and metric ALREADY IN HOST ORDER and returns the char of the advertisement type */
+char find_advertisement_type(fnaddr_t dest, uint32_t metric){
+	char type = (char)35; //this is completely random...
+	//fprintf(stderr, "\nTrying to find the advertisement type for metric of %d\n", metric);
+	if(dest == fish_getaddress()){
+		//fprintf(stderr, "\tDest is equal to my address, noting as 'LINK-STATE' (loopback?)\n");
+		type = FISH_FWD_TYPE_LS; 
+	}
+	else if(dest == ALL_NEIGHBORS){
+		//fprintf(stderr, "\tDest is equal to Broadcast,  noting as 'Broadcast'\n");
+		type = FISH_FWD_TYPE_BROADCAST;
+	}
+	else{
+		if(metric == 1){
+			//fprintf(stderr, "\tMetric is 1, designated as connected????\n");
+			type = FISH_FWD_TYPE_NEIGHBOR;
+		}
+		else{
+			//fprintf(stderr, "\tDesignating advertisement as Distance Vector\n");
+			type = FISH_FWD_TYPE_DV;
+		}	
+	}
+	return type;
+}
+
+/* ========================================================= */
+/* ============ Overriding Forwarding table Funcs ========= */
+/* ========================================================= */
+int dv_fwtable_iterator_cb(void *callback_data, fnaddr_t dest, int prefix_len, fnaddr_t next_hop, int metric, void *entry_data){
+	/* callback data SHOULD	be a dv frame entry */
+	
+	int prefix_length = 0;
+	char connection_type = 5;
+	fprintf(stderr, "Iterating over DV entries!!!!\n");
+	struct dv_packet *dv = (struct dv_packet *)callback_data;
+	fprintf(stderr, "\nDV PACKET\n"
+			"\tPacket Source is: %s\n"
+			"\tNumber of adv in this packet: %d\n", fn_ntoa(dest), ntohs(dv->num_adv));
+	int i = 0;
 	struct dv_adv *advertisement = &dv->adv_packets; //set the advertisement to point to the packets 
 	while(i < ntohs(dv->num_adv)){
 		/* calc the netmask */
 		/* check out the metric */
 		/*
 		 */
-		fprintf(stderr, "\tAdvertisement number %d:\n"
-				"\t\tDest is: %s\n"
-				"\t\tNetmask: %s\n"
+		fprintf(stderr, "\n\tAdvertisement number %d:\n"
+				"\t\tDest is: %s\n", i, fn_ntoa(advertisement->dest));
+		fprintf(stderr, "\t\tNetmask: %s\n"
 				"\t\tMetric : %d\n",
-				i,
-				fn_ntoa(advertisement->dest),
-				fn_ntoa((fnaddr_t)advertisement->netmask),
+				fn_ntoa(advertisement->netmask),
 				ntohl(advertisement->metric));
+		prefix_length = find_prefix_length(ntohl(advertisement->netmask));
+		//connection_type = find_advertisement_type(advertisement->dest, ntohl(advertisement->metric));
+		/* connection type should be DV since it's a dv packet.... */
+		connection_type = 'D';
+		fprintf(stderr, "\t\tConnection type: %c\n"
+				"\t\tPrefix Length  : %d\n",
+				connection_type, prefix_length);
+		/* by default adds to the table currently */
+		//add_return = fish_fwd.add_fwtable_entry(advertisement->dest, prefix_length, dv_packet_source, 
+		//				  ntohl(advertisement->metric) - 1, connection_type, 0); //last entry is user data
+		//fprintf(stderr, "Value of add_return is: %lu\n", (unsigned long)add_return);
 		advertisement++;
 		i++;
 		
 	}
+	return 0;
 }
 
 
-/* =================== Basic Implementation ================ */
-int my_fishnode_l3_receive(void *l3frame, int len){
-	/* Future:
-	 * 	Call implementation of fishnet l3 protocols such as DV routing
+void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param, char type){
+	int callback_ret = 0;
+	int i = 0;
+	
+	for(; i < my_forwarding_table_size; i++){
+		if(my_forwarding_table[i].valid && (my_forwarding_table[i].type == type)){
+			fprintf(stderr, "Found an entry to update!\n");
+			callback_ret = callback(callback_param, my_forwarding_table[i].dest,
+								my_forwarding_table[i].prefix_length,
+								my_forwarding_table[i].next_hop,
+								my_forwarding_table[i].metric,
+								my_forwarding_table[i].user_data);
+			if(callback_ret){
+				/* we need to delete this entry */
+				fprintf(stderr, "We need to remove entry %d!\n", i);
+				//fish_fwd.remove_fwtable_entry(
+			}
+		}	
+	}
+	
+}
+
+/* ========================================================= */
+/* ============== Basic DV Routing Implementation ========== */ 
+/* ========================================================= */
+/* takes in a distance vector routing frame and calls iterate entries for all dv entries */
+void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
+	struct dv_packet *dv = (struct dv_packet *)dv_frame;
+	fprintf(stderr, "\nDV PACKET\n"
+			"\tPacket Source is: %s\n"
+			"\tNumber of adv in this packet: %d\n", fn_ntoa(dv_packet_source), ntohs(dv->num_adv));
+
+	fish_fwd.iterate_entries(dv_fwtable_iterator_cb, dv_frame, FISH_FWD_TYPE_DV);
+}
+
+void send_dv_advertisement(){
+	void *l4frame = malloc(sizeof(struct dv_packet) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
+	if(l4frame == NULL){
+		fprintf(stderr, "Unable to malloc for empty dv advertisement, Exiting... \n");
+		exit(445);
+	}
+	l4frame += L2_HEADER_LENGTH + L3_HEADER_LENGTH;
+	
+	struct dv_packet *blank = l4frame;
+	blank->num_adv = 0;
+
+	//send the blank advertisement to all neighbors with a TTL of 1
+	fish_l3.fish_l3_send(blank, BLANK_DV_ADV, ALL_NEIGHBORS, L3_PROTO_DV, 1);
+}
+
+void advertise_dv(){
+	fprintf(stderr, "BROADCASTING WITH 0 ADVERTISEMENTS!\n");
+	send_dv_advertisement();
+	fish_scheduleevent(30000, advertise_dv, 0);
+}
+
+/* ========================================================= */
+/* ================ Neighbor Implementation ================ */
+/* ========================================================= */
+int neigh_fwtable_iterator_cb(void *callback_data, fnaddr_t dest, int prefix_len, fnaddr_t next_hop, int metric, void *entry_data){
+	/*callback data should be a neighbor frame... but we don't really need this??? */
+	fprintf(stderr, "Iterating through Neighbor entries!\n");
+
+	return 0;
+}
+void send_neigh_response(fnaddr_t source){
+	fprintf(stderr, "\tSending a neighbor response packet\n");	
+	
+	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
+	if(neighbor_packet == NULL){
+		fprintf(stderr, "Unable to malloc for neighbor response packet, Exiting!\n");
+		exit(667);
+	}
+	neighbor_packet += L2_HEADER_LENGTH + L3_HEADER_LENGTH;//set pointer to point to neigh packet
+	
+	struct neighbor_header *neigh = (struct neighbor_header *)neighbor_packet;
+	neigh->type = htons(NEIGH_RESPONSE);
+	
+	fish_l3.fish_l3_send(neighbor_packet, NEIGH_LENGTH, source, L3_PROTO_NEIGH, NEIGH_TTL);
+}
+
+void send_neigh_request(){
+	fprintf(stderr, "\tSending a neighbor request packet\n");
+	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
+	
+	if(neighbor_packet == NULL){
+		fprintf(stderr, "Unable to malloc for neighbor request packet, Exiting!\n");
+		exit(666);
+	}
+	neighbor_packet += L2_HEADER_LENGTH + L3_HEADER_LENGTH;//set pointer to point to neigh packet
+	
+	struct neighbor_header *neigh = (struct neighbor_header *)neighbor_packet;
+	neigh->type = htons(NEIGH_REQUEST);
+
+	fish_l3.fish_l3_send(neigh, NEIGH_LENGTH, ALL_NEIGHBORS, L3_PROTO_NEIGH, NEIGH_TTL);
+	//free(neighbor_packet);
+}
+
+void process_neighbor_packet(void *neigh_frame, fnaddr_t neigh_source, int len){
+	fprintf(stderr, "\nNEIGHBOR PACKET\n");
+	struct neighbor_header *neigh = (struct neighbor_header *)neigh_frame;
+	if(ntohs(neigh->type) == NEIGH_REQUEST){
+		send_neigh_response(neigh_source);
+	}
+	else{
+		//received a response, add to forwarding table????
+		fprintf(stderr, "\tReceived a Neighbor response\n");
+		fish_fwd.iterate_entries(neigh_fwtable_iterator_cb, neigh, FISH_FWD_TYPE_NEIGHBOR);
+	}	
+}
+
+void timed_neighbor_probe(){
+	/* probe the network every 30 seconds! 
+	 * NOTE: if a neighbor has not been heard from in 2 minutes, remove!
 	 */
+	fprintf(stderr, "\nSENDING OUT A NEIGHBOR PROBE!\n");
+	send_neigh_request();
+	fish_scheduleevent(30000, timed_neighbor_probe, 0);
+}	
+
+/* ========================================================= */
+/* =================== Basic Implementation ================ */
+/*========================================================== */
+int my_fishnode_l3_receive(void *l3frame, int len){
 	int ret = 1;
 
 	struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;
 	int proto = l3_header->proto;
 	fnaddr_t src   = l3_header->src;
+	
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
 		//fprintf(stderr, "This packet is meant for me!\n");
 		
 		/* check if dv packet */
 		if(l3_header->proto == L3_PROTO_DV){
-			l3_header++; //move pointer to l3 header along
-			process_dv_packet(l3_header, len - L3_HEADER_LENGTH);	
+			l3_header++; //move pointer to l3 header along to point to l4frame
+			process_dv_packet(l3_header, src, len - L3_HEADER_LENGTH);	
+			l3_header--;
+		}
+		else if(l3_header->proto == L3_PROTO_NEIGH){
+			l3_header++; //move pointer to l3 header along to point to l4frame
+			process_neighbor_packet(l3_header, src, len - L3_HEADER_LENGTH);	
 			l3_header--;
 		}	
 		l3_header++; //move pointer to l3 header along
 		fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
 	}
+	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
 		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
 		/* and received by node previously, drop with no FCMP message */
-		if(received_previously(l3_header->src, l3_header->id)){
-			fprintf(stderr, "Received previously. Dropping packet!\n");
-		}
-		/* frame passed up network stack and forwarded back out over fishnet with decremented ttl */
-		else{
-			fprintf(stderr, "Not received previously. Forwarding out to fishnet with decremented TTL\n");
+		
+		/* print out this frame... seems odd. */
+		//fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len + L3_HEADER_LENGTH, 9);
+		
+		if(!received_previously(l3_header->src, l3_header->id)){
+			/* add packet ID as seen already! */
+			add_id_seen(l3_header->id);
 			
+
 			if(l3_header->proto == L3_PROTO_DV){
 				l3_header++; //move pointer to l3 header along
-				fprintf(stderr, "Received a DV packet broadcast to all nodes\n");
-				process_dv_packet(l3_header, len - L3_HEADER_LENGTH);	
+				//fprintf(stderr, "Received a DV packet broadcast to all nodes\n");
+				process_dv_packet(l3_header, src, len - L3_HEADER_LENGTH);	
+				l3_header--;
+			}	
+			else if(l3_header->proto == L3_PROTO_NEIGH){
+				l3_header++; //move pointer to l3 header along to point to l4frame
+				process_neighbor_packet(l3_header, src, len - L3_HEADER_LENGTH);	
 				l3_header--;
 			}	
 			
@@ -161,11 +391,11 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); //pass up network stack
 			l3_header--; //move pointer back to original position
 			l3_header->ttl -= 1; //decrement ttl
-			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	        	
+			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
 		}
 	}
 	else{
-		fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
+		//fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
 		l3_header->ttl -= 1;
 		ret = fish_l3.fish_l3_forward(l3frame, len);
 	}	
@@ -180,6 +410,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	if(l3frame == NULL){
 		fprintf(stderr, "Failed to malloc for function: my_fish_l3_send\n");
 	}
+	
 	l3frame += L3_HEADER_LENGTH; //move the pointer to start of l3 header
 	memcpy(l3frame, l4frame, len);
  	l3frame -= L3_HEADER_LENGTH; //move back to the original spot
@@ -193,6 +424,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	l3_header->dest  = dst_addr;
 	
 	//fish_debugframe(7, "SEND THING", l3frame, 3, len + L3_HEADER_LENGTH, 9);
+	add_id_seen(l3_header->id);
 
 	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
 	return ret;
@@ -215,6 +447,7 @@ int my_fish_l3_forward(void *l3frame, int len){
 	/* NOTE: original frame memory must not be modified */
         struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 
+	fish_debugframe(7, "TEMP THING", l3frame, 3, len, 9);
 	/* if TTL is 0 and the dest is not local, drop packet and generate FCMP error message */
 	if((l3_header->ttl == 0) && !is_local(l3_header->dest)){
 		//fprintf(stderr, "TTL is 0 and dest is not local! Generating FCMP packet...\n");
@@ -223,17 +456,18 @@ int my_fish_l3_forward(void *l3frame, int len){
 		ret = 0;	
 	}	
 	/* lookup l3 dest in the forwarding table */
-	//fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
+	fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 	
-	/* check to see if the dest is broadcast, then we dont have to look up */
-	if(l3_header->dest != ALL_NEIGHBORS){
-		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
-	}
-	else{
+	/* Broadcast SHOULD be in the forwarding table, but we will see. */
+	/* NOTE: Apparently not... */
+	if(l3_header->dest == ALL_NEIGHBORS){
 		next_hop = ALL_NEIGHBORS;
 	}
+	else{
+		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
+	}
 	/* if there is no route to the destination, drop the frame and generate correct FCMP error message */
-	if((ret != 0) && ((uint32_t)next_hop == 0)){
+	if((ret != 0) && ((uint32_t)next_hop == 0) && (l3_header->proto != L3_PROTO_FCMP)){
 		//fprintf(stderr, "No route to the destination. Next hop is: %s. Dropping Frame!\n", fn_ntoa(next_hop));
 		fcmp_error = htonl(FCMP_NET_UNREACHABLE);
 		generate_fcmp(fcmp_error, l3_header->id, l3_header->src);
@@ -242,22 +476,24 @@ int my_fish_l3_forward(void *l3frame, int len){
 	}
 	/* use fish_l2_send to send the frame to the next-hop neighbor indicated by the forwarding table */
 	if(ret != 0){
-		//get that debug statement in there!!!!!
-		//fish_debugframe(7, "TEMP THING", l3frame, 3, len + L3_HEADER_LENGTH, 9);
-		fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
+		//fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
+		add_id_seen(l3_header->id);
 		fish_l2.fish_l2_send(l3frame, next_hop, len); 
 	}
+
+	/* do we need to add the frame to the routing table here too? */
 	return ret;
 }
 
-/* =================== Full Functionality ================= */
+/* ========================================================= */
+/* =================== Full Functionality ================== */
+/* ========================================================= */
 void *my_add_fwtable_entry(fnaddr_t dst,
                            int prefix_length,
                            fnaddr_t next_hop,
                            int metric,
                            char type,
                            void *user_data){
-	/*lmao how do we store in the table???? */
 	fprintf(stderr, "Adding to the table if it exists!\n");
 	
 	/* check to see if we need to make the table bigger */
@@ -265,27 +501,25 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 		resize_forwarding_table();
 	}	
 	
-	struct forwarding_table_entry *entry = malloc(sizeof(struct forwarding_table_entry));
-	if(entry == NULL){
-		fprintf(stderr, "Failed to malloc in function 'my_add_fwtable_entry'. Exiting!\n");
-		exit(6);
-	}
-	
-
 	/* iterate through the table until we find an invalid entry */
 	int j = 0;
-	while(my_forwarding_table[j++].valid){}	
+	while(my_forwarding_table[j].valid){
+		j++;
+	}	
 	
-	//found an invalid spot, overwriting!
+	fprintf(stderr, "Found an invalid (empty?) spot at position %d in table, overwriting!\n", j);
 	my_forwarding_table[j].next_hop      = next_hop;   
 	my_forwarding_table[j].dest          = dst;
 	my_forwarding_table[j].prefix_length = prefix_length;
 	my_forwarding_table[j].type          = type;
-	my_forwarding_table[j].metric        = metric;
+	my_forwarding_table[j].metric        = ntohl(metric) + 1;
 	my_forwarding_table[j].user_data     = user_data;
+	my_forwarding_table[j].valid         = 1;
+	my_forwarding_table[j].is_best       = '>'; //temporary, not everything should be the best!
 
 	num_forwarding_table_entries++;
-	return (void *)1;//PLS DONT RETURN 1.
+	/* return the pointer to the entry */
+	return (void *)&my_forwarding_table[j];
 }
 
 void *my_remove_fwtable_entry(void *route_key){
@@ -328,12 +562,10 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 			/* mask off the bottom bits of the address????? */
 			mask &= ~((1 << (32 - my_forwarding_table[i].prefix_length)) - 1);
 			fprintf(stderr, "Checking entry %d in the table\n", i);
-			fprintf(stderr, "\tMatching: %s to\n"
-					"\tEntry   : %s\n"
-					"\tNetmask : %s\n"
+			fprintf(stderr, "\tMatching: %s to\n", fn_ntoa(my_forwarding_table[i].dest));
+			fprintf(stderr, "\tEntry   : %s\n", fn_ntoa(addr));
+			fprintf(stderr, "\tNetmask : %s\n"
 					"\tmask    : %d\n",
-					fn_ntoa(addr),
-					fn_ntoa(my_forwarding_table[i].dest),
 					fn_ntoa(htonl(mask)),
 					my_forwarding_table[i].prefix_length);
 			sleep(3);//temp addition to watch
@@ -350,11 +582,13 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 					
 		}
 	}
-	fprintf(stderr, "Longest match for %s resolves to next hop %s\n", fn_ntoa(addr), fn_ntoa(best_match));
+	fprintf(stderr, "Longest match resolves to next hop %s\n", fn_ntoa(best_match));
 	return best_match;
 }
 
-/* =================== Main implementation =================*/
+/* ========================================================= */
+/* =================== Main implementation ================= */
+/* ========================================================= */
 
 void sigint_handler(int sig)
 {
@@ -371,7 +605,7 @@ static void keyboard_callback(char *line)
    }
    else if (0 == strcasecmp("show route", line)){
       fish_print_forwarding_table();
-      print_my_forwarding_table(); //try out my own implementation
+      //print_my_forwarding_table(); //try out my own implementation
    }
    else if (0 == strcasecmp("show dv", line))
       fish_print_dv_state();
@@ -461,13 +695,13 @@ int main(int argc, char **argv)
    	 * the neighbor protocol to be working, whereas it is redundant with DV.
    	 * Running them both doesn't break the fishnode, but will cause extra routing
    	 * overhead */
-   	fish_enable_neighbor_builtin( 0
-   	      | NEIGHBOR_USE_LIBFISH_NEIGHBOR_DOWN
-   	);
+   	//fish_enable_neighbor_builtin( 0
+   	//      | NEIGHBOR_USE_LIBFISH_NEIGHBOR_DOWN
+   	//);
 
    	/* Enable the link-state routing protocol.  This requires the neighbor
     	 * protocol to be enabled. */
-   	fish_enable_lsarouting_builtin(0);
+   	//fish_enable_lsarouting_builtin(0);
 
    	/* Full-featured DV routing.  I suggest NOT using this until you have some
     	 * reasonable expectation that your code works.  This generates a lot of
@@ -481,7 +715,6 @@ int main(int argc, char **argv)
    	     | DVROUTING_KEEP_ROUTE_HISTORY
    	);
 
-
 	/* initialize our forwarding table */
 	my_forwarding_table = calloc(sizeof(struct forwarding_table_entry), 256);
 	if(my_forwarding_table == NULL){
@@ -490,6 +723,16 @@ int main(int argc, char **argv)
 	}
 	my_forwarding_table_size = 256;
 
+	/* initialize our struct of packet ids seen */
+	packet_ids_seen = calloc(sizeof(uint32_t), 512);
+	if(packet_ids_seen == NULL){
+		fprintf(stderr, "Unable to initialize packet ids seen array with 512 entries! Exiting!\n");
+		exit(53);
+	}
+	
+	/* start our 30 second timed functions for neighbor and dv advertisements */
+	timed_neighbor_probe();
+	advertise_dv();
 	
 	/* Execute the libfish event loop */
 	fish_main();
@@ -501,4 +744,3 @@ int main(int argc, char **argv)
 	printf("Fishnode exiting cleanly.\n");
 	return 0;
 }
-
