@@ -94,25 +94,6 @@ uint8_t check_id_seen(uint32_t id){
 	return ret;
 }
 
-/* generate fcmp messages to the correct place! */
-void generate_fcmp(uint32_t error, uint32_t id, fnaddr_t packet_dest){
-	/* both id and error are already passed in in network order */
-	void *l4frame;
-	//malloc for entire packet
-	struct fishnet_fcmp_header *fcmp_header = malloc(sizeof(struct fishnet_fcmp_header) + L3_HEADER_LENGTH + L2_HEADER_LENGTH);
-	if(fcmp_header == NULL){
-		fprintf(stderr, "Unable to malloc for fcmp header in function 'generate_fcmp'. EXITING.\n");
-		exit(5);
-	}
-	//move the fcmp header pointer to the end of the packet
-	fcmp_header = (struct fishnet_fcmp_header *)((uint8_t *)fcmp_header + L3_HEADER_LENGTH + L2_HEADER_LENGTH);
-	fcmp_header->error   = error;
-	fcmp_header->seq_num = id;
-	l4frame = fcmp_header; //set the l4frame pointer to the correct place
-
-	fish_l3.fish_l3_send(l4frame, FCMP_LENGTH, packet_dest, L3_PROTO_FCMP, MAX_TTL); 
-}
-
 int received_previously(fnaddr_t source, uint32_t packet_id){
 	int ret = 0;
 	if(source == ALL_NEIGHBORS){
@@ -176,7 +157,6 @@ int dv_fwtable_iterator_cb(void *callback_data, fnaddr_t dest, int prefix_len, f
 	
 	int prefix_length = 0;
 	char connection_type = 5;
-	fprintf(stderr, "Iterating over DV entries!!!!\n");
 	struct dv_packet *dv = (struct dv_packet *)callback_data;
 	fprintf(stderr, "\nDV PACKET\n"
 			"\tPacket Source is: %s\n"
@@ -240,11 +220,6 @@ void my_iterate_entries(fwtable_iterator_cb callback, void *callback_param, char
 /* ========================================================= */
 /* takes in a distance vector routing frame and calls iterate entries for all dv entries */
 void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
-	struct dv_packet *dv = (struct dv_packet *)dv_frame;
-	fprintf(stderr, "\nDV PACKET\n"
-			"\tPacket Source is: %s\n"
-			"\tNumber of adv in this packet: %d\n", fn_ntoa(dv_packet_source), ntohs(dv->num_adv));
-
 	fish_fwd.iterate_entries(dv_fwtable_iterator_cb, dv_frame, FISH_FWD_TYPE_DV);
 }
 
@@ -278,6 +253,7 @@ int neigh_fwtable_iterator_cb(void *callback_data, fnaddr_t dest, int prefix_len
 
 	return 0;
 }
+
 void send_neigh_response(fnaddr_t source){
 	fprintf(stderr, "\tSending a neighbor response packet\n");	
 	
@@ -295,7 +271,7 @@ void send_neigh_response(fnaddr_t source){
 }
 
 void send_neigh_request(){
-	fprintf(stderr, "\tSending a neighbor request packet\n");
+	//fprintf(stderr, "\tSending a neighbor request packet\n");
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	
 	if(neighbor_packet == NULL){
@@ -312,7 +288,7 @@ void send_neigh_request(){
 }
 
 void process_neighbor_packet(void *neigh_frame, fnaddr_t neigh_source, int len){
-	fprintf(stderr, "\nNEIGHBOR PACKET\n");
+	//fprintf(stderr, "\nNEIGHBOR PACKET\n");
 	struct neighbor_header *neigh = (struct neighbor_header *)neigh_frame;
 	if(ntohs(neigh->type) == NEIGH_REQUEST){
 		send_neigh_response(neigh_source);
@@ -399,7 +375,6 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		l3_header->ttl -= 1;
 		ret = fish_l3.fish_l3_forward(l3frame, len);
 	}	
-	
 	return ret;
 }
 
@@ -423,7 +398,6 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	l3_header->src   = fish_getaddress(); 
 	l3_header->dest  = dst_addr;
 	
-	//fish_debugframe(7, "SEND THING", l3frame, 3, len + L3_HEADER_LENGTH, 9);
 	add_id_seen(l3_header->id);
 
 	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
@@ -441,23 +415,18 @@ int is_local(fnaddr_t l3_dest){
 }
 
 int my_fish_l3_forward(void *l3frame, int len){
-	int ret = 1;
-	uint32_t fcmp_error = 0;
 	fnaddr_t next_hop = (fnaddr_t)0;
-	/* NOTE: original frame memory must not be modified */
-        struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
+        
+	struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 
-	fish_debugframe(7, "TEMP THING", l3frame, 3, len, 9);
+	//fish_debugframe(7, "TEMP THING", l3frame, 3, len, 9);
 	/* if TTL is 0 and the dest is not local, drop packet and generate FCMP error message */
 	if((l3_header->ttl == 0) && !is_local(l3_header->dest)){
-		//fprintf(stderr, "TTL is 0 and dest is not local! Generating FCMP packet...\n");
-		fcmp_error = htonl(FCMP_TTL_EXCEEDED);
-		generate_fcmp(fcmp_error, l3_header->id, l3_header->src);
-		ret = 0;	
+		fish_fcmp.send_fcmp_response(l3frame, len, FCMP_TTL_EXCEEDED);
+		return 0;	
 	}	
-	/* lookup l3 dest in the forwarding table */
-	fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 	
+	fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 	/* Broadcast SHOULD be in the forwarding table, but we will see. */
 	/* NOTE: Apparently not... */
 	if(l3_header->dest == ALL_NEIGHBORS){
@@ -467,22 +436,19 @@ int my_fish_l3_forward(void *l3frame, int len){
 		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
 	}
 	/* if there is no route to the destination, drop the frame and generate correct FCMP error message */
-	if((ret != 0) && ((uint32_t)next_hop == 0) && (l3_header->proto != L3_PROTO_FCMP)){
-		//fprintf(stderr, "No route to the destination. Next hop is: %s. Dropping Frame!\n", fn_ntoa(next_hop));
-		fcmp_error = htonl(FCMP_NET_UNREACHABLE);
-		generate_fcmp(fcmp_error, l3_header->id, l3_header->src);
-		ret = 0;
+	if(next_hop == 0){
+		//fprintf(stderr, "No route to the destination. Dropping Frame!\n");
+		fish_fcmp.send_fcmp_response(l3frame, len, FCMP_NET_UNREACHABLE);
+		return 0;
 
 	}
 	/* use fish_l2_send to send the frame to the next-hop neighbor indicated by the forwarding table */
-	if(ret != 0){
-		//fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
-		add_id_seen(l3_header->id);
-		fish_l2.fish_l2_send(l3frame, next_hop, len); 
-	}
+	//fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
+	add_id_seen(l3_header->id);
+	fish_l2.fish_l2_send(l3frame, next_hop, len); 
 
 	/* do we need to add the frame to the routing table here too? */
-	return ret;
+	return 1;
 }
 
 /* ========================================================= */
@@ -523,6 +489,9 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 }
 
 void *my_remove_fwtable_entry(void *route_key){
+	/* route key is the address in the forwarding table
+	 * index in and mark as invalid
+	 */
 	fprintf(stderr, "Removing an entry from the forwarding table!\n");
 	int i = 0;
 	/* this is definitely not going to work! */
