@@ -15,9 +15,14 @@
 static int noprompt = 0;
 int num_forwarding_table_entries = 0;
 int my_forwarding_table_size = 0;
+
 int num_packet_ids_stored = 0;
 
+int num_neighbors_stored = 0;
+int my_neighbor_table_size = 0;
+
 struct forwarding_table_entry *my_forwarding_table;
+struct neighbor_entry *my_neighbor_table;
 void *stored_route_keys;
 uint32_t *packet_ids_seen;
 
@@ -223,7 +228,7 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 	fish_fwd.iterate_entries(dv_fwtable_iterator_cb, dv_frame, FISH_FWD_TYPE_DV);
 }
 
-void send_dv_advertisement(){
+void send_blank_dv_advertisement(){
 	void *l4frame = malloc(sizeof(struct dv_packet) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
 	if(l4frame == NULL){
 		fprintf(stderr, "Unable to malloc for empty dv advertisement, Exiting... \n");
@@ -240,22 +245,83 @@ void send_dv_advertisement(){
 
 void advertise_dv(){
 	fprintf(stderr, "BROADCASTING WITH 0 ADVERTISEMENTS!\n");
-	send_dv_advertisement();
+	send_blank_dv_advertisement();
 	fish_scheduleevent(30000, advertise_dv, 0);
 }
 
 /* ========================================================= */
 /* ================ Neighbor Implementation ================ */
 /* ========================================================= */
-int neigh_fwtable_iterator_cb(void *callback_data, fnaddr_t dest, int prefix_len, fnaddr_t next_hop, int metric, void *entry_data){
-	/*callback data should be a neighbor frame... but we don't really need this??? */
-	fprintf(stderr, "Iterating through Neighbor entries!\n");
+void print_my_neighbor_table(){
+       fprintf(stderr,"\n" 
+		"           NEIGHBOR TABLE         \n"
+		" =================================\n"
+		"     Neighbor           TTL       \n"
+		" ----------------      -----      \n");
 
-	return 0;
+       int i = 0;
+       for(; i < my_neighbor_table_size; i++){
+       		if(my_neighbor_table[i].valid){
+			fprintf(stderr, "%16s       %d\n", fn_ntoa(my_neighbor_table[i].neigh), my_neighbor_table[i].ttl);
+		}
+       }
+}
+
+void decrement_neighbor_table(){
+	//decrement the ttl on every valid neighbor!
+	int i = 0;
+	for(; i < num_neighbors_stored; i++){
+		if(my_neighbor_table[i].valid){
+			my_neighbor_table[i].ttl -= 1;
+			if(my_neighbor_table[i].ttl == 0){
+				//mark as invalid!
+				my_neighbor_table[i].valid = 0;
+			}
+		}
+	}
+	//schedule this to happen again in 1 second!
+	fish_scheduleevent(1000, decrement_neighbor_table, 0);
+}
+
+/* resize table... checking is handled by function add_neighbor_to_table */
+void resize_neighbor_table(){
+	//double the table and try and realloc for the space!
+	my_neighbor_table_size *= 2;
+
+	my_neighbor_table = realloc(my_neighbor_table, my_neighbor_table_size * sizeof(struct neighbor_entry)); 
+	if(my_neighbor_table == NULL){
+		fprintf(stderr, "Unable to double the size of the neighbor table to %d! Exiting...\n", my_neighbor_table_size);
+		exit(1234);
+	}
+
+}
+
+void add_neighbor_to_table(fnaddr_t neigh){
+	if(num_neighbors_stored >= my_neighbor_table_size){
+		fprintf(stderr, "Need to make a bigger neighbor table!\n");
+		resize_neighbor_table();
+	}
+	int i = 0;
+	while(my_neighbor_table[i].valid){
+		if(my_neighbor_table[i].neigh == neigh){
+			//fprintf(stderr, "Heard from the same neighbor: %s! Refreshing TTL!\n", fn_ntoa(neigh));
+			//currently, the way this is written could have multiple entries for the same neighbors.... but it should be ok!
+			my_neighbor_table[i].ttl = 120;
+			return;
+		}
+		i++;
+	}
+	
+	fprintf(stderr, "New Neighbor: %s\n", fn_ntoa(neigh));
+	//now we have an open spot!
+	my_neighbor_table[i].neigh = neigh;
+	my_neighbor_table[i].ttl   = 120;
+	my_neighbor_table[i].valid = 1;
+	num_neighbors_stored += 1;
 }
 
 void send_neigh_response(fnaddr_t source){
-	fprintf(stderr, "\tSending a neighbor response packet\n");	
+	//fprintf(stderr, "\tSending a neighbor response packet\n");	
 	
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	if(neighbor_packet == NULL){
@@ -295,8 +361,8 @@ void process_neighbor_packet(void *neigh_frame, fnaddr_t neigh_source, int len){
 	}
 	else{
 		//received a response, add to forwarding table????
-		fprintf(stderr, "\tReceived a Neighbor response\n");
-		fish_fwd.iterate_entries(neigh_fwtable_iterator_cb, neigh, FISH_FWD_TYPE_NEIGHBOR);
+		//fprintf(stderr, "\tReceived a Neighbor response from %s\n", fn_ntoa(neigh_source));
+		add_neighbor_to_table(neigh_source);
 	}	
 }
 
@@ -304,7 +370,7 @@ void timed_neighbor_probe(){
 	/* probe the network every 30 seconds! 
 	 * NOTE: if a neighbor has not been heard from in 2 minutes, remove!
 	 */
-	fprintf(stderr, "\nSENDING OUT A NEIGHBOR PROBE!\n");
+	//fprintf(stderr, "\nSENDING OUT A NEIGHBOR PROBE!\n");
 	send_neigh_request();
 	fish_scheduleevent(30000, timed_neighbor_probe, 0);
 }	
@@ -426,13 +492,13 @@ int my_fish_l3_forward(void *l3frame, int len){
 		return 0;	
 	}	
 	
-	fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 	/* Broadcast SHOULD be in the forwarding table, but we will see. */
 	/* NOTE: Apparently not... */
 	if(l3_header->dest == ALL_NEIGHBORS){
 		next_hop = ALL_NEIGHBORS;
 	}
 	else{
+		fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
 	}
 	/* if there is no route to the destination, drop the frame and generate correct FCMP error message */
@@ -478,7 +544,7 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 	my_forwarding_table[j].dest          = dst;
 	my_forwarding_table[j].prefix_length = prefix_length;
 	my_forwarding_table[j].type          = type;
-	my_forwarding_table[j].metric        = ntohl(metric) + 1;
+	my_forwarding_table[j].metric        = metric + 1;
 	my_forwarding_table[j].user_data     = user_data;
 	my_forwarding_table[j].valid         = 1;
 	my_forwarding_table[j].is_best       = '>'; //temporary, not everything should be the best!
@@ -490,31 +556,21 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 
 void *my_remove_fwtable_entry(void *route_key){
 	/* route key is the address in the forwarding table
-	 * index in and mark as invalid
+	 * cast to an entry and mark as invalid then return the user data with it????
 	 */
 	fprintf(stderr, "Removing an entry from the forwarding table!\n");
-	int i = 0;
 	/* this is definitely not going to work! */
-	while(my_forwarding_table[i].route_key != route_key){
-		i++;
-	}
-	my_forwarding_table[i].valid = 0; 	//mark as invalid
+	((struct forwarding_table_entry *)(route_key))->valid = 0; 	//mark as invalid
 	num_forwarding_table_entries--;		//decrement the number of entries in the table
-	return my_forwarding_table[i].user_data;//return the user data stored for this entry
+	return ((struct forwarding_table_entry *)(route_key))->user_data;//return the user data stored for this entry
 }
 
 int my_update_fwtable_metric(void *route_key, int new_metric){
-	int update_successful = 0;
-	int i = 0;
+	int update_successful = 1;
+
 	/* this is definitely not going to work! */
-	for(; i < my_forwarding_table_size; i++){
-		if(my_forwarding_table[i].valid && (my_forwarding_table[i].route_key == route_key)){
-				fprintf(stderr, "Found an entry to update!\n");
-				my_forwarding_table[i].metric = new_metric;
-				update_successful = 1;	
-		}	
-	}
-	
+	((struct forwarding_table_entry *)(route_key))->metric = new_metric;
+
 	return update_successful;
 }
 
@@ -522,20 +578,21 @@ int my_update_fwtable_metric(void *route_key, int new_metric){
 fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 	fprintf(stderr, "Looking for the best next hop!\n");
 	fnaddr_t best_match = (fnaddr_t)htonl(0);
-	int i = 0, mask = 0, best_match_length = 0, match_length = 0;
+	int i = 0, best_match_length = 0, match_length = 0;
+	unsigned int mask = 0;
 	
 	for(; i < my_forwarding_table_size; i++){
 		if(my_forwarding_table[i].valid){
 			/* DOES THE MASK HAVE TO BE IN NETWORK ORDER OR WHAT???? */
-			mask = (1 << my_forwarding_table[i].prefix_length) - 1;
+			mask = (1 << (my_forwarding_table[i].prefix_length)) - 1;
 			/* mask off the bottom bits of the address????? */
-			mask &= ~((1 << (32 - my_forwarding_table[i].prefix_length)) - 1);
+			//mask &= ((1 << (32 - my_forwarding_table[i].prefix_length)) - 1);
 			fprintf(stderr, "Checking entry %d in the table\n", i);
 			fprintf(stderr, "\tMatching: %s to\n", fn_ntoa(my_forwarding_table[i].dest));
 			fprintf(stderr, "\tEntry   : %s\n", fn_ntoa(addr));
 			fprintf(stderr, "\tNetmask : %s\n"
 					"\tmask    : %d\n",
-					fn_ntoa(htonl(mask)),
+					fn_ntoa(mask),
 					my_forwarding_table[i].prefix_length);
 			sleep(3);//temp addition to watch
 			/* mask off host bits of addr to compare to table entry */
@@ -568,13 +625,12 @@ void sigint_handler(int sig)
 static void keyboard_callback(char *line)
 {
    if (0 == strcasecmp("show neighbors", line))
-      fish_print_neighbor_table();
+      print_my_neighbor_table();
    else if (0 == strcasecmp("show arp", line)){ //edited for my own table
       fish_print_arp_table();
    }
    else if (0 == strcasecmp("show route", line)){
-      fish_print_forwarding_table();
-      //print_my_forwarding_table(); //try out my own implementation
+      print_my_forwarding_table();
    }
    else if (0 == strcasecmp("show dv", line))
       fish_print_dv_state();
@@ -612,11 +668,23 @@ int main(int argc, char **argv)
 	struct sigaction sa;
    	int arg_offset = 1;
 
-   	/* set functions to my custom pointers */
+   	/* ===================================
+	 * =================================== 
+	
+	 * set functions to my custom pointers */
 	fish_l3.fish_l3_send = my_fish_l3_send;
 	fish_l3.fishnode_l3_receive = my_fishnode_l3_receive;
 	fish_l3.fish_l3_forward = my_fish_l3_forward;
 
+	/* custom pointers for advanced functionality */
+	fish_fwd.add_fwtable_entry     = my_add_fwtable_entry;
+	fish_fwd.remove_fwtable_entry  = my_remove_fwtable_entry;
+	fish_fwd.update_fwtable_metric = my_update_fwtable_metric;
+	fish_fwd.longest_prefix_match  = my_longest_prefix_match;
+   	/* ===================================
+	 * =================================== */
+	
+	
 	/* Verify and parse the command line parameters */
 	if (argc != 2 && argc != 3 && argc != 4)
 	{
@@ -702,6 +770,20 @@ int main(int argc, char **argv)
 	/* start our 30 second timed functions for neighbor and dv advertisements */
 	timed_neighbor_probe();
 	advertise_dv();
+	
+	/*make our neighbors table */
+
+	my_neighbor_table = calloc(sizeof(struct neighbor_entry), 64);
+	if(my_neighbor_table == NULL){
+		fprintf(stderr, "Unable to initialize neighbor table with 64 entries! Exiting!\n");
+		exit(54);
+	}
+	my_neighbor_table_size = 64;
+
+	
+	/* start our decrement of the table */
+	decrement_neighbor_table();
+	
 	
 	/* Execute the libfish event loop */
 	fish_main();

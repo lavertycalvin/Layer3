@@ -39,6 +39,11 @@ struct neighbor_header{
 	uint16_t 	type;
 }__attribute__((packed));
 
+struct neighbor_entry{
+	fnaddr_t neigh;
+	uint32_t ttl;
+	uint8_t  valid;
+};
 
 struct fishnet_l3_header{
 	uint8_t 	ttl;
@@ -48,10 +53,6 @@ struct fishnet_l3_header{
 	fnaddr_t 	dest;
 }__attribute__((packed));
 
-struct fishnet_fcmp_header{
-	uint32_t 	error;
-	uint32_t 	seq_num;
-}__attribute__((packed));
 
 struct forwarding_table_entry{
 	uint8_t 	valid;
