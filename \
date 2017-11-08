@@ -212,34 +212,20 @@ void resize_dv_table(){
 
 /* returns:
  * 	 0 if not in dv table
- * 	 1 if already present, but metric has changed, 
+ * 	 1 if already present, 
  * 	 2 if we need to add a backup
- * 	 3 if already present
  */
 int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 	int present = 0, i = 0;
-	if(dest == fish_getaddress()){
-		//dont do anything
-		return 3;
-	}
 	for(; i < my_dv_table_size; i++){
 		//only check valid entries
 		if(my_dv_table[i].valid){
 			//check if duplicate 
 			if((my_dv_table[i].dest == dest) && (my_dv_table[i].next_hop == next_hop)){
 				fprintf(stderr, "%s with next hop", fn_ntoa(dest)); 
-				fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
-				if(metric != my_dv_table[i].metric){
-					//we need to update metric!!!!!
-					present = 1;	
-				}
-				else{
-					//we don't need to make any changes to this entry, just refresh ttl
-					present = 3;
-				}
-				//either case we need to update ttl
-				my_dv_table[i].ttl = 180;
-				return present;
+				fprintf(stderr, "%s is already in dv table! Update metric?\n", fn_ntoa(next_hop));
+				//refresh ttl and update metric if necessary!
+				return 1;
 			}
 			//check if dest is already there--> add a backup route
 			else if(my_dv_table[i].dest == dest){
@@ -351,27 +337,26 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 		fprintf(stderr, "\t\tConnection type: %c\n"
 				"\t\tPrefix Length  : %d\n",
 				connection_type, prefix_length);
-		dv_process = in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric));
-		if(dv_process == 0){
+		if(ntohl(advertisement->metric) == MAX_TTL){
+			if(in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric))){
+				fprintf(stderr, "\t\t\tWE NEED TO MAKE SURE WE MARK AS WITHDRAWN!\n");
+			}
+		}
+		else if(advertisement->dest == fish_getaddress()){
+			//this should be ok since we will receive our address marked with max_ttl 
+			fprintf(stderr, "Received an advertisement with my name, skipping....\n");
+		}
+	  	else if(!(dv_process = in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric)))){
 			fprintf(stderr, "\t\t\tWe need to add this entry to the DV Table!\n");
 			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric) + 1, advertisement->netmask, 'A');
-		}
-	  	else if(dv_process == DV_UPDATE){
-		}
-		else if(dv_process == DV_BACKUP){
-		
 		}
 		else{
 			//fprintf(stderr, "\t\t\tThis entry is already in the DV table!\n");
 			if(dv_process == 2){
-				//add a backup entry to our dv table
 				add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric) + 1, advertisement->netmask, 'B');
 			}
 			else if(dv_process == 1){
-				//we have an entry that is already in dv table, need to update metric?
-			}
-			else{
-				//nothing has changed with this route
+				
 			}
 		}	
 		

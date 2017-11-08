@@ -34,6 +34,13 @@
 #define NEIGH_RESPONSE 2
 #define NEIGH_TTL      1
 
+/* changes to dv table */
+#define DV_UPDATE   1 
+#define DV_BACKUP   2
+#define DV_PRESENT  3 
+
+
+
 /* structs */
 struct neighbor_header{
 	uint16_t 	type;
@@ -46,6 +53,7 @@ struct neighbor_entry{
 };
 
 struct dv_entry{
+	uint8_t  in_forwarding_table;
 	uint8_t  valid;
 	char     state;
 	fnaddr_t dest;
