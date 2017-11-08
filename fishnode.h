@@ -59,7 +59,8 @@ struct dv_entry{
 	fnaddr_t dest;
 	fnaddr_t next_hop;
 	int 	 metric;
-	uint32_t ttl;	
+	uint32_t ttl;
+	void    *fwd_table_ptr;	
 };
 
 

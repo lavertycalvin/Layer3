@@ -210,6 +210,26 @@ void resize_dv_table(){
 }
 
 
+void update_dv_table(struct dv_entry *entry, int new_metric){
+	//we are already gaurenteed it exists!
+	fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
+	if(new_metric >= MAX_TTL){
+		fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
+		new_metric = MAX_TTL;
+		entry->state = 'W';
+		entry->metric = new_metric;
+	}
+	else{
+		entry->metric = new_metric;	
+	}
+	if(entry->in_forwarding_table){
+		//update entry in the forwarding table
+		fprintf(stderr, "Used in the forwarding table, need to update this entry!\n");
+	}
+
+}
+
+
 /* returns:
  * 	 0 if not in dv table
  * 	 1 if already present, but metric has changed, 
@@ -227,15 +247,18 @@ int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 		if(my_dv_table[i].valid){
 			//check if duplicate 
 			if((my_dv_table[i].dest == dest) && (my_dv_table[i].next_hop == next_hop)){
-				fprintf(stderr, "%s with next hop", fn_ntoa(dest)); 
-				fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
+				//fprintf(stderr, "%s with next hop ", fn_ntoa(dest)); 
+				//fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
 				if(metric != my_dv_table[i].metric){
 					//we need to update metric!!!!!
-					present = 1;	
+					present = DV_UPDATE;
+
+					//we are just going to update here....
+					update_dv_table(&my_dv_table[i], metric);	
 				}
 				else{
 					//we don't need to make any changes to this entry, just refresh ttl
-					present = 3;
+					present = DV_PRESENT;
 				}
 				//either case we need to update ttl
 				my_dv_table[i].ttl = 180;
@@ -243,12 +266,17 @@ int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 			}
 			//check if dest is already there--> add a backup route
 			else if(my_dv_table[i].dest == dest){
-				fprintf(stderr, "%s already in dv table, ", fn_ntoa(dest));
-				fprintf(stderr, "need to add backup route with next hop: %s\n", fn_ntoa(next_hop));
-				return 2;
+				//fprintf(stderr, "%s already in dv table, ", fn_ntoa(dest));
+				//fprintf(stderr, "need to add backup route with next hop: %s\n", fn_ntoa(next_hop));
+				present = DV_BACKUP;
 			}
 		}
 	}
+	if((present == 0) && (metric == MAX_TTL)){
+		//fake that we already have in the table since the route was withdrawn before we were added
+		present = DV_PRESENT;
+	}
+	
 	//if present in dv table but has a different next hop, add to dv table as backup
 	return present;
 }
@@ -267,20 +295,22 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 	my_dv_table[i].state    = state;
 	my_dv_table[i].dest     = dest;
 	my_dv_table[i].next_hop = next_hop;
-	my_dv_table[i].metric   = metric;
+	my_dv_table[i].metric   = metric + 1;
         my_dv_table[i].ttl      = 180;	
 
 	num_dv_stored += 1;
 
-	//check to see if already in the forwarding table
+	//check to see if destination is already in the forwarding table
 	if(!in_forwarding_table(dest)){
-		//if so, check to see if this metric is better!
 		fprintf(stderr, "%s is not in forwarding table, ", fn_ntoa(dest)); 
 		fprintf(stderr, "adding with next hop: %s!\n", fn_ntoa(next_hop));	
-		fish_fwd.add_fwtable_entry(dest, find_prefix_length(netmask), next_hop, metric, 'D', 0);
+		my_dv_table[i].fwd_table_ptr = fish_fwd.add_fwtable_entry(dest, find_prefix_length(netmask), next_hop, metric, 'D', 0);
+		my_dv_table[i].in_forwarding_table = 1;
 	}
 	else{
-		fprintf(stderr, "%s already in forwarding table... better metric????\n", fn_ntoa(dest));
+		//if so, check to see if this metric is better!
+		fprintf(stderr, "%s already in forwarding table... is this a better metric????\n", fn_ntoa(dest));
+		//if this one is better, remove the other from the forwarding table
 	}	
 }
 
@@ -297,9 +327,11 @@ void decrement_dv_table(){
 				//if state is 'A' and moving to 'W', update the shortest backup route to 'A'
 				if(my_dv_table[i].state == 'A' && my_dv_table[i].in_forwarding_table){
 					fprintf(stderr, "Looking to replace this entry in the forwarding table!\n");	
+					fish_fwd.remove_fwtable_entry(my_dv_table[i].fwd_table_ptr);
+					my_dv_table[i].in_forwarding_table = 0;
 				}
-				my_dv_table[i].state  = 'W';
 				
+				my_dv_table[i].state  = 'W';
 				my_dv_table[i].ttl    = 180;
 				my_dv_table[i].metric = MAX_TTL;
 			
@@ -345,39 +377,30 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 				fn_ntoa(advertisement->netmask),
 				ntohl(advertisement->metric));
 		prefix_length = find_prefix_length(ntohl(advertisement->netmask));
-		//connection_type = find_advertisement_type(advertisement->dest, ntohl(advertisement->metric));
 		/* connection type should be DV since it's a dv packet.... */
 		connection_type = 'D';
 		fprintf(stderr, "\t\tConnection type: %c\n"
 				"\t\tPrefix Length  : %d\n",
 				connection_type, prefix_length);
 		dv_process = in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric));
-		if(dv_process == 0){
-			fprintf(stderr, "\t\t\tWe need to add this entry to the DV Table!\n");
-			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric) + 1, advertisement->netmask, 'A');
+		if(dv_process == 0 && ntohl(advertisement->metric) == MAX_TTL){
+			//not in the table and the node is unreachable... ignore
+			fprintf(stderr, "\t\t\tIGNORING THIS ENTRY!\n");
+		}
+		else if(dv_process == 0){
+			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric), advertisement->netmask, 'A');
 		}
 	  	else if(dv_process == DV_UPDATE){
+			fprintf(stderr, "\t\t\tWe need to update the metric an entry!\n");	
 		}
 		else if(dv_process == DV_BACKUP){
-		
+			fprintf(stderr, "\t\t\tWe need to add a backup an entry!\n");	
+			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric), advertisement->netmask, 'B');
 		}
 		else{
-			//fprintf(stderr, "\t\t\tThis entry is already in the DV table!\n");
-			if(dv_process == 2){
-				//add a backup entry to our dv table
-				add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric) + 1, advertisement->netmask, 'B');
-			}
-			else if(dv_process == 1){
-				//we have an entry that is already in dv table, need to update metric?
-			}
-			else{
-				//nothing has changed with this route
-			}
+			fprintf(stderr, "\t\t\tThis is already in the forwarding table, nothing needs to be done!\n");
 		}	
 		
-		//add_return = fish_fwd.add_fwtable_entry(advertisement->dest, prefix_length, dv_packet_source, 
-		//				  ntohl(advertisement->metric) - 1, connection_type, 0); //last entry is user data
-		//fprintf(stderr, "Value of add_return is: %lu\n", (unsigned long)add_return);
 		advertisement++;
 		i++;
 		
@@ -405,7 +428,7 @@ void advertise_dv(){
 	fish_scheduleevent(30000, advertise_dv, 0);
 }
 
-
+/* advertise to our neighbor our routing table */
 void advertise_full_dv();
 
 /* ========================================================= */
@@ -466,12 +489,13 @@ void add_neighbor_to_table(fnaddr_t neigh){
 			//fprintf(stderr, "Heard from the same neighbor: %s! Refreshing TTL!\n", fn_ntoa(neigh));
 			//currently, the way this is written could have multiple entries for the same neighbors.... but it should be ok!
 			my_neighbor_table[i].ttl = 120;
+			in_dv_table(neigh, neigh, 1);
 			return;
 		}
 		i++;
 	}
 	
-	fprintf(stderr, "New Neighbor: %s\n", fn_ntoa(neigh));
+	//fprintf(stderr, "New Neighbor: %s\n", fn_ntoa(neigh));
 	//now we have an open spot!
 	my_neighbor_table[i].neigh = neigh;
 	my_neighbor_table[i].ttl   = 120;
@@ -481,7 +505,7 @@ void add_neighbor_to_table(fnaddr_t neigh){
 	//add to dv table here---> will add to forwarding table
 	//if already in dv table, will be refreshed!
 	if(!in_dv_table(neigh, neigh, 1)){
-			add_to_dv_table(neigh, neigh, 1, ALL_NEIGHBORS, 'A');  
+			add_to_dv_table(neigh, neigh, 0, ALL_NEIGHBORS, 'A');  
 	}
 }
 
@@ -691,7 +715,7 @@ void *my_add_fwtable_entry(fnaddr_t dst,
                            int metric,
                            char type,
                            void *user_data){
-	fprintf(stderr, "Adding to the table if it exists!\n");
+	//fprintf(stderr, "Adding to the table if it exists!\n");
 	
 	/* check to see if we need to make the table bigger */
 	if(num_forwarding_table_entries >= my_forwarding_table_size){
@@ -704,12 +728,12 @@ void *my_add_fwtable_entry(fnaddr_t dst,
 		j++;
 	}	
 	
-	fprintf(stderr, "Found an invalid/empty spot at position %d in forwarding table, overwriting!\n", j);
+	//fprintf(stderr, "Found an invalid/empty spot at position %d in forwarding table, overwriting!\n", j);
 	my_forwarding_table[j].next_hop      = next_hop;   
 	my_forwarding_table[j].dest          = dst;
 	my_forwarding_table[j].prefix_length = prefix_length;
 	my_forwarding_table[j].type          = type;
-	my_forwarding_table[j].metric        = metric;
+	my_forwarding_table[j].metric        = metric + 1;
 	my_forwarding_table[j].user_data     = user_data; //place in dv table!!!!
 	my_forwarding_table[j].valid         = 1;
 	my_forwarding_table[j].is_best       = '>'; //temporary, not everything should be the best!
@@ -757,7 +781,7 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 					"\tmask    : %d\n",
 					fn_ntoa(ntohl(mask)),
 					my_forwarding_table[i].prefix_length);
-			sleep(1);//temp addition to watch
+			//sleep(1);//temp addition to watch
 			/* mask off host bits of addr to compare to table entry */
 			if((htonl(mask) & (uint32_t)addr) == (uint32_t)my_forwarding_table[i].dest){
 				//fprintf(stderr, "Found a match of %d long!!!!!!\n\n", my_forwarding_table[i].prefix_length);
