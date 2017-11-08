@@ -45,6 +45,16 @@ struct neighbor_entry{
 	uint8_t  valid;
 };
 
+struct dv_entry{
+	uint8_t  valid;
+	char     state;
+	fnaddr_t dest;
+	fnaddr_t next_hop;
+	int 	 metric;
+	uint32_t ttl;	
+};
+
+
 struct fishnet_l3_header{
 	uint8_t 	ttl;
 	uint8_t 	proto;
