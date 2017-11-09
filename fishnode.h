@@ -39,7 +39,7 @@
 #define DV_BACKUP   2
 #define DV_PRESENT  3 
 
-
+#define MAX_ADV_IN_PACKET 120 //I think this is right
 
 /* structs */
 struct neighbor_header{

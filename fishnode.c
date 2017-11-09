@@ -35,53 +35,6 @@ uint32_t *packet_ids_seen;
 /* ========================================================= */
 /* =================== Helper functions! =================== */
 /* ========================================================= */
-int in_forwarding_table(fnaddr_t dest){
-	int present = 0, i = 0;
-	for(; i < my_forwarding_table_size; i++){
-		if(my_forwarding_table[i].valid && (my_forwarding_table[i].dest == dest)){
-			return 1; 
-		}
-	}
-	return present;	
-}
-void print_my_forwarding_table(){
-	fprintf(stdout, ""
-	"                    CUSTOM FORWARDING TABLE                      \n"
-	"    C = Connected, L = Loopback, B = Broadcast                   \n"
-	"  N = Neighbor, D = Distance-Vector, Z = Link-State,             \n"
-	"                      > = Best                                   \n"
-	"=================================================================\n"
-	" T      Destination            Next Hop       Metric   Pkt Cnt   \n"
-	" - --------------------   -----------------   ------   -------   \n");
-
-	int i = 0;
-	for(; i < my_forwarding_table_size; i++){
-		if(my_forwarding_table[i].valid){ //only print if valid
-			fprintf(stdout, " %c%c %16s/%d %19s   %6d    %6d  \n",
-				my_forwarding_table[i].type,
-				my_forwarding_table[i].is_best,
-				fn_ntoa(my_forwarding_table[i].dest),
-				my_forwarding_table[i].prefix_length,
-				fn_ntoa(my_forwarding_table[i].next_hop),
-				my_forwarding_table[i].metric,
-				my_forwarding_table[i].pkt_count);
-		}
-	}
-}
-
-/* resize forwarding table, exit if unable to malloc for more space
- * DOUBLES in size each time!
- */
-void resize_forwarding_table(){
-	my_forwarding_table_size *= 2;
-	//fprintf(stderr, "We have to resize our forwarding table. Doubling the size to %d entries!\n", my_forwarding_table_size);
-	my_forwarding_table = realloc(my_forwarding_table, sizeof(struct forwarding_table_entry) * my_forwarding_table_size);
-	if(my_forwarding_table == NULL){
-		fprintf(stderr, "Unable to double the size of the forwarding table, exiting!\n");
-		exit(722);
-	}
-}
-
 void clear_packet_id_table(){
 	free(packet_ids_seen);
 	packet_ids_seen = calloc(sizeof(uint32_t), 512);
@@ -172,19 +125,109 @@ char find_advertisement_type(fnaddr_t dest, uint32_t metric){
 /* ========================================================= */
 /* ============ Overriding Forwarding table Funcs ========= */
 /* ========================================================= */
+int in_forwarding_table(fnaddr_t dest){
+	int present = 0, i = 0;
+	for(; i < my_forwarding_table_size; i++){
+		if(my_forwarding_table[i].valid && (my_forwarding_table[i].dest == dest)){
+			return 1; 
+		}
+	}
+	return present;	
+}
 
+void print_my_forwarding_table(){
+	fprintf(stdout, ""
+	"                    CUSTOM FORWARDING TABLE                      \n"
+	"    C = Connected, L = Loopback, B = Broadcast                   \n"
+	"  N = Neighbor, D = Distance-Vector, Z = Link-State,             \n"
+	"                      > = Best                                   \n"
+	"=================================================================\n"
+	" T      Destination            Next Hop       Metric   Pkt Cnt   \n"
+	" - --------------------   -----------------   ------   -------   \n");
 
+	int i = 0;
+	for(; i < my_forwarding_table_size; i++){
+		if(my_forwarding_table[i].valid){ //only print if valid
+			fprintf(stdout, " %c%c %16s/%d ", 
+				my_forwarding_table[i].type,
+				my_forwarding_table[i].is_best,
+				fn_ntoa(my_forwarding_table[i].dest),
+				my_forwarding_table[i].prefix_length);
+			fprintf(stdout,	"%19s   %6d    %6d  \n",
+				fn_ntoa(my_forwarding_table[i].next_hop),
+				my_forwarding_table[i].metric,
+				my_forwarding_table[i].pkt_count);
+		}
+	}
+}
 
-
-
-
+/* resize forwarding table, exit if unable to malloc for more space
+ * DOUBLES in size each time!
+ */
+void resize_forwarding_table(){
+	my_forwarding_table_size *= 2;
+	//fprintf(stderr, "We have to resize our forwarding table. Doubling the size to %d entries!\n", my_forwarding_table_size);
+	my_forwarding_table = realloc(my_forwarding_table, sizeof(struct forwarding_table_entry) * my_forwarding_table_size);
+	if(my_forwarding_table == NULL){
+		fprintf(stderr, "Unable to double the size of the forwarding table, exiting!\n");
+		exit(722);
+	}
+}
 
 /* ========================================================= */
 /* ================ DV Routing Implementation ============== */ 
 /* ========================================================= */
-void print_my_dv_table(){
+void replace_forwarding_table(struct dv_entry *entry, int current_metric){
+	//look for another entry that is valid in the dv table that matches dest
+	int replaced = 0;
+	//remove the entry from the forwarding table
 
-	fprintf(stderr, "             MY DISTANCE VECTOR ROUTING STATE                 \n"
+
+	struct dv_entry *best_backup = NULL;
+	int best_metric = current_metric;
+	int i = 0;
+	for(; i < my_dv_table_size; i++){
+		//must be: valid, match the entry's destination, and be a backup route to replace the original
+		if(my_dv_table[i].valid && (my_dv_table[i].dest == entry->dest) && (my_dv_table[i].state == 'B')){
+		  	//there could be multiple backups, take the best one!
+			if(my_dv_table[i].metric < best_metric){
+				best_backup = &my_dv_table[i];
+				best_metric = best_backup->metric;
+				replaced = 1;
+			}	
+		}
+	}
+	if(!replaced){
+		fprintf(stderr, "%s was removed from the forwarding table and there was no backup!\n\n", fn_ntoa(entry->dest));
+		fish_fwd.remove_fwtable_entry(entry->fwd_table_ptr);
+		entry->valid = 0;
+		entry->in_forwarding_table = 0;
+	}
+	else{
+		fish_fwd.remove_fwtable_entry(entry->fwd_table_ptr);
+		entry->in_forwarding_table = 0;
+		if(current_metric != MAX_TTL){
+			//the other metric was made longer but not unreachable
+			entry->state = 'B';
+		}
+		
+		fprintf(stderr, "\t\t\t%s will replace ", fn_ntoa(best_backup->next_hop));
+		fprintf(stderr, "%s in the forwarding table ", fn_ntoa(entry->next_hop));
+		fprintf(stderr, "as next hop for: %s\n\n", fn_ntoa(entry->dest));
+
+		best_backup->state = 'A';
+		best_backup->in_forwarding_table = 1;
+		best_backup->fwd_table_ptr = fish_fwd.add_fwtable_entry(best_backup->dest, 
+									  32, 
+									  best_backup->next_hop, 
+									  best_backup->metric - 1, 
+									  'D', 
+									  0);
+	}
+}
+
+void print_my_dv_table(){
+	fprintf(stdout, "             MY DISTANCE VECTOR ROUTING STATE                 \n"
   	                "A = Active, B = Backup, W = Withdrawn, > = In FWD Table       \n"
 	                "===========================================================   \n"
 	                "S      Destination            Next Hop       Dist   TTL       \n"
@@ -192,11 +235,10 @@ void print_my_dv_table(){
 	int i = 0;
 	for(; i < my_dv_table_size; i++){
 		if(my_dv_table[i].valid){
-			fprintf(stderr, "%c %20s", my_dv_table[i].state, fn_ntoa(my_dv_table[i].dest));
-			fprintf(stderr, "%20s   %4d  %4d\n", fn_ntoa(my_dv_table[i].next_hop), my_dv_table[i].metric, my_dv_table[i].ttl);
+			fprintf(stdout, "%c %20s", my_dv_table[i].state, fn_ntoa(my_dv_table[i].dest));
+			fprintf(stdout, "%20s   %4d  %4d\n", fn_ntoa(my_dv_table[i].next_hop), my_dv_table[i].metric, my_dv_table[i].ttl);
 		}
 	}
-
 }
 
 void resize_dv_table(){
@@ -217,6 +259,9 @@ void update_dv_table(struct dv_entry *entry, int new_metric){
 		fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
 		new_metric = MAX_TTL;
 		entry->state = 'W';
+		if(entry->in_forwarding_table){
+			replace_forwarding_table(entry, new_metric - 1);
+		}
 		entry->metric = new_metric;
 	}
 	else{
@@ -238,6 +283,9 @@ void update_dv_table(struct dv_entry *entry, int new_metric){
  */
 int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 	int present = 0, i = 0;
+	if(metric != MAX_TTL){
+		metric++;
+	}
 	if(dest == fish_getaddress()){
 		//dont do anything
 		return 3;
@@ -247,8 +295,8 @@ int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 		if(my_dv_table[i].valid){
 			//check if duplicate 
 			if((my_dv_table[i].dest == dest) && (my_dv_table[i].next_hop == next_hop)){
-				//fprintf(stderr, "%s with next hop ", fn_ntoa(dest)); 
-				//fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
+				fprintf(stderr, "\t\t%s with next hop ", fn_ntoa(dest)); 
+				fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
 				if(metric != my_dv_table[i].metric){
 					//we need to update metric!!!!!
 					present = DV_UPDATE;
@@ -311,8 +359,10 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 		//if so, check to see if this metric is better!
 		fprintf(stderr, "%s already in forwarding table... is this a better metric????\n", fn_ntoa(dest));
 		//if this one is better, remove the other from the forwarding table
+		//replace_forwarding_table();
 	}	
 }
+
 
 void decrement_dv_table(){
 	int i = 0;
@@ -323,22 +373,22 @@ void decrement_dv_table(){
 		if((my_dv_table[i].ttl == 0) && my_dv_table[i].valid){
 			//decide to mark as withdrawn or remove
 			if((my_dv_table[i].state == 'A') || (my_dv_table[i].state == 'B')){
-				fprintf(stderr, "Marking %s as stale!\n", fn_ntoa(my_dv_table[i].dest));
+				fprintf(stderr, "Marking %s with next ", fn_ntoa(my_dv_table[i].dest)); 
+				fprintf(stderr, "hop %s as stale!\n", fn_ntoa(my_dv_table[i].next_hop));
 				//if state is 'A' and moving to 'W', update the shortest backup route to 'A'
 				if(my_dv_table[i].state == 'A' && my_dv_table[i].in_forwarding_table){
-					fprintf(stderr, "Looking to replace this entry in the forwarding table!\n");	
-					fish_fwd.remove_fwtable_entry(my_dv_table[i].fwd_table_ptr);
-					my_dv_table[i].in_forwarding_table = 0;
+					replace_forwarding_table(&my_dv_table[i], MAX_TTL);
 				}
 				
 				my_dv_table[i].state  = 'W';
 				my_dv_table[i].ttl    = 180;
 				my_dv_table[i].metric = MAX_TTL;
 			
-				//remove from forwarding table
 			}
 			//if withdrawn
 			else if(my_dv_table[i].state == 'W'){
+				//shouldn't be in the forwarding table, just mark as invalid
+				//should stop advertising this thing
 				fprintf(stderr, "Removing %s from dv table!!\n", fn_ntoa(my_dv_table[i].dest));
 				my_dv_table[i].valid = 0;
 			}
@@ -383,7 +433,8 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 				"\t\tPrefix Length  : %d\n",
 				connection_type, prefix_length);
 		dv_process = in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric));
-		if(dv_process == 0 && ntohl(advertisement->metric) == MAX_TTL){
+		
+		if((dv_process == 0) && (ntohl(advertisement->metric) == MAX_TTL)){
 			//not in the table and the node is unreachable... ignore
 			fprintf(stderr, "\t\t\tIGNORING THIS ENTRY!\n");
 		}
@@ -399,7 +450,7 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 		}
 		else{
 			fprintf(stderr, "\t\t\tThis is already in the forwarding table, nothing needs to be done!\n");
-		}	
+		}
 		
 		advertisement++;
 		i++;
@@ -428,14 +479,98 @@ void advertise_dv(){
 	fish_scheduleevent(30000, advertise_dv, 0);
 }
 
-/* advertise to our neighbor our routing table */
-void advertise_full_dv();
+/* neighbor is needed for the split horizon implementation */
+void send_full_dv_advertisement(fnaddr_t neighbor){
+	//check to see how many advertisements we are making
+	int num_adv_sending = 0;
+	if(num_dv_stored > MAX_ADV_IN_PACKET){
+		num_adv_sending = MAX_ADV_IN_PACKET;	
+	}
+	else{
+		num_adv_sending = num_dv_stored;
+	}
+	fprintf(stderr, "\n\n"
+			"======================================\n"
+			"SENDING %d advertisements to %s\n"
+			"======================================\n\n",
+			num_adv_sending, fn_ntoa(neighbor));
+	//malloc for our dv packet
+	void *l4frame = malloc((sizeof(struct dv_adv) * num_adv_sending) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
+	l4frame += L2_HEADER_LENGTH + L3_HEADER_LENGTH; //move the frame along, thanks a lot!
+        
+	struct dv_packet *neigh_adv = (struct dv_packet *)l4frame;
+	struct dv_adv *fill_this = &neigh_adv->adv_packets;
+	if(neigh_adv == NULL){
+		fprintf(stderr, "TRYING TO SEND A DV UPDATE AND IT FAILED :( Exiting....\n");
+		exit(2342234);
+	}
+	
+	neigh_adv->num_adv = htons(num_adv_sending);	
+	
+ 	int i = 0;
+	int adv_added = 0;
+	for(; i < my_dv_table_size; i++){
+		//only send valid active or backup routes
+		if(my_dv_table[i].valid){
+			//add this to the dv packet that we malloced!!!!
+			fill_this->dest = my_dv_table[i].dest;
+			if(my_dv_table[i].next_hop == neighbor){
+				//advertise as unreachable since learned from this interface
+				fill_this->metric = htonl(MAX_TTL);
+			}
+			else{
+				fill_this->metric = htonl(my_dv_table[i].metric);
+			}
+			fill_this->netmask = ALL_NEIGHBORS;
+			
+			fprintf(stderr, "\n"
+					"\tHERES ADVERTISEMENT %d:\n"
+					"\t\tDest  : %s\n"
+					"\t\tMetric: %d\n",
+					adv_added,
+					fn_ntoa(fill_this->dest),
+					ntohl(fill_this->metric));
+			fprintf(stderr, "\t\tLearned this from: %s\n\n", fn_ntoa(my_dv_table[i].next_hop));
+
+			adv_added++;
+			fill_this++;
+			//if we already added all of our advertisements we can stop
+			if(adv_added == num_adv_sending){
+				break;
+			}
+		}
+
+	}
+	//pass to lvl 3
+	if(num_adv_sending == 0){
+		fprintf(stderr, "ARE WE FAILING BEFORE FREEING NOTHING???\n");
+		//free(l4frame);	
+	}
+	else{
+		fprintf(stderr, "ARE WE FAILING BEFORE WE SEND THE DV ADVERTISEMETN???\n");
+		fish_l3.fish_l3_send(neigh_adv, 2 + (num_adv_sending * sizeof(struct dv_adv)), neighbor, L3_PROTO_DV, 1);
+		fprintf(stderr, "ARE WE FAILING AT THIS POINT????\n");
+		//free(l4frame);
+	}
+}
+
+/* advertise to our neighbor our routing table on triggered update*/
+void advertise_full_dv(){
+	int i = 0;
+	for(; i < my_neighbor_table_size; i++){
+		if(my_neighbor_table[i].valid){
+			fprintf(stderr, "Sending dv advertisement to neighbor %s\n", fn_ntoa(my_neighbor_table[i].neigh));
+			send_full_dv_advertisement(my_neighbor_table[i].neigh);
+		}
+	}
+	fish_scheduleevent(30000, advertise_full_dv, 0);//schedule to send again in 30 seconds!
+}
 
 /* ========================================================= */
 /* ================ Neighbor Implementation ================ */
 /* ========================================================= */
 void print_my_neighbor_table(){
-       fprintf(stderr,"\n" 
+       fprintf(stdout,"\n" 
 		"           NEIGHBOR TABLE         \n"
 		" =================================\n"
 		"     Neighbor           TTL       \n"
@@ -444,7 +579,7 @@ void print_my_neighbor_table(){
        int i = 0;
        for(; i < my_neighbor_table_size; i++){
        		if(my_neighbor_table[i].valid){
-			fprintf(stderr, "%17s       %4d\n", fn_ntoa(my_neighbor_table[i].neigh), my_neighbor_table[i].ttl);
+			fprintf(stdout, "%17s       %4d\n", fn_ntoa(my_neighbor_table[i].neigh), my_neighbor_table[i].ttl);
 		}
        }
 }
@@ -467,7 +602,6 @@ void decrement_neighbor_table(){
 
 /* resize table... checking is handled by function add_neighbor_to_table */
 void resize_neighbor_table(){
-	//double the table and try and realloc for the space!
 	my_neighbor_table_size *= 2;
 
 	my_neighbor_table = realloc(my_neighbor_table, my_neighbor_table_size * sizeof(struct neighbor_entry)); 
@@ -480,23 +614,18 @@ void resize_neighbor_table(){
 
 void add_neighbor_to_table(fnaddr_t neigh){
 	if(num_neighbors_stored >= my_neighbor_table_size){
-		fprintf(stderr, "Need to make a bigger neighbor table!\n");
 		resize_neighbor_table();
 	}
 	int i = 0;
 	while(my_neighbor_table[i].valid){
 		if(my_neighbor_table[i].neigh == neigh){
-			//fprintf(stderr, "Heard from the same neighbor: %s! Refreshing TTL!\n", fn_ntoa(neigh));
-			//currently, the way this is written could have multiple entries for the same neighbors.... but it should be ok!
 			my_neighbor_table[i].ttl = 120;
-			in_dv_table(neigh, neigh, 1);
+			in_dv_table(neigh, neigh, 0);
 			return;
 		}
 		i++;
 	}
 	
-	//fprintf(stderr, "New Neighbor: %s\n", fn_ntoa(neigh));
-	//now we have an open spot!
 	my_neighbor_table[i].neigh = neigh;
 	my_neighbor_table[i].ttl   = 120;
 	my_neighbor_table[i].valid = 1;
@@ -504,14 +633,12 @@ void add_neighbor_to_table(fnaddr_t neigh){
 
 	//add to dv table here---> will add to forwarding table
 	//if already in dv table, will be refreshed!
-	if(!in_dv_table(neigh, neigh, 1)){
+	if(!in_dv_table(neigh, neigh, 0)){
 			add_to_dv_table(neigh, neigh, 0, ALL_NEIGHBORS, 'A');  
 	}
 }
 
 void send_neigh_response(fnaddr_t source){
-	//fprintf(stderr, "\tSending a neighbor response packet\n");	
-	
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	if(neighbor_packet == NULL){
 		fprintf(stderr, "Unable to malloc for neighbor response packet, Exiting!\n");
@@ -526,7 +653,6 @@ void send_neigh_response(fnaddr_t source){
 }
 
 void send_neigh_request(){
-	//fprintf(stderr, "\tSending a neighbor request packet\n");
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	
 	if(neighbor_packet == NULL){
@@ -539,11 +665,9 @@ void send_neigh_request(){
 	neigh->type = htons(NEIGH_REQUEST);
 
 	fish_l3.fish_l3_send(neigh, NEIGH_LENGTH, ALL_NEIGHBORS, L3_PROTO_NEIGH, NEIGH_TTL);
-	//free(neighbor_packet);
 }
 
 void process_neighbor_packet(void *neigh_frame, fnaddr_t neigh_source, int len){
-	//fprintf(stderr, "\nNEIGHBOR PACKET\n");
 	struct neighbor_header *neigh = (struct neighbor_header *)neigh_frame;
 	if(ntohs(neigh->type) == NEIGH_REQUEST){
 		send_neigh_response(neigh_source);
@@ -757,7 +881,10 @@ void *my_remove_fwtable_entry(void *route_key){
 
 int my_update_fwtable_metric(void *route_key, int new_metric){
 	int update_successful = 1;
-
+	if(route_key == NULL){
+		fprintf(stderr, "WTF, this is a null pointer... how can we update?\n");
+		return 0;
+	}
 	/* this is definitely not going to work! */
 	((struct forwarding_table_entry *)(route_key))->metric = new_metric;
 
@@ -768,6 +895,7 @@ int my_update_fwtable_metric(void *route_key, int new_metric){
 fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 	fnaddr_t best_match = (fnaddr_t)htonl(0);
 	int i = 0, best_match_length = 0, match_length = 0;
+	int best_metric = MAX_TTL;
 	uint32_t mask = 0;
 	
 	for(; i < my_forwarding_table_size; i++){
@@ -786,8 +914,9 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 			if((htonl(mask) & (uint32_t)addr) == (uint32_t)my_forwarding_table[i].dest){
 				//fprintf(stderr, "Found a match of %d long!!!!!!\n\n", my_forwarding_table[i].prefix_length);
 				match_length = my_forwarding_table[i].prefix_length;
-				if(match_length > best_match_length){
+				if(match_length >= best_match_length && (my_forwarding_table[i].metric < best_metric)){
 					fprintf(stderr, "\n\t\tFound a new best next hop %s!\n\n", fn_ntoa(my_forwarding_table[i].next_hop));
+					best_metric = my_forwarding_table[i].metric;
 					best_match = my_forwarding_table[i].next_hop;
 					best_match_length = match_length;
 				}	
@@ -968,6 +1097,7 @@ int main(int argc, char **argv)
 	/* start our 30 second timed functions for neighbor and dv advertisements */
 	timed_neighbor_probe();
 	advertise_dv();
+	advertise_full_dv();
 	
 	/*make our neighbors table */
 
