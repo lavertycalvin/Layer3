@@ -701,6 +701,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
 		//fprintf(stderr, "This packet is meant for me!\n");
+		fish_debugframe(FISH_DEBUG_ALL, "FOR ME!!!", l3frame, 3, len + L3_HEADER_LENGTH, L3_PROTO_DV);
 		
 		/* check if dv packet */
 		if(l3_header->proto == L3_PROTO_DV){
@@ -714,16 +715,18 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			l3_header--;
 		}	
 		l3_header++; //move pointer to l3 header along
+		
+		fprintf(stderr, "Sending this packet to lvl4 of this fishnode!\n");
 		fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
 	}
 	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
+		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
 		/* and received by node previously, drop with no FCMP message */
 		
 		/* print out this frame... seems odd. */
-		//fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len + L3_HEADER_LENGTH, 9);
+		fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len, 9);
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
 			/* add packet ID as seen already! */
@@ -748,10 +751,15 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			l3_header->ttl -= 1; //decrement ttl
 			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
 		}
+		else{
+			fprintf(stderr, "WE already saw this one!!!\n");
+		}
 	}
 	else{
+		fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len + (sizeof(struct fishnet_l3_header)), L3_PROTO_DV);
 		//fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
 		l3_header->ttl -= 1;
+		fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len + (sizeof(struct fishnet_l3_header)), L3_PROTO_DV);
 		ret = fish_l3.fish_l3_forward(l3frame, len);
 	}	
 	return ret;
@@ -771,6 +779,10 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	
         struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 	
+	if((ttl >= MAX_TTL) || (ttl == 0)){
+		fprintf(stderr, "setting ttl to MAX_TTL CAUSEOF THIS THING\n");
+		ttl = MAX_TTL;
+	}
 	l3_header->ttl   = ttl;
 	l3_header->proto = proto;
         l3_header->id    = htonl(fish_next_pktid());
@@ -779,6 +791,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	
 	add_id_seen(l3_header->id);
 
+	
 	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
 	return ret;
 }
