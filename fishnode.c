@@ -69,7 +69,9 @@ void add_id_seen(uint32_t id, fnaddr_t src){
 int received_previously(fnaddr_t src, uint32_t id){
 	int ret = 0;
 	int i = 0;
+	fprintf(stderr, "\nLooking for match: %s\t%d\n", fn_ntoa(src), ntohl(id));
 	for(; i < num_packet_ids_stored; i++){
+		fprintf(stderr, "\tEntry %d: %s\t %d\n", i, fn_ntoa(packet_ids_seen[i].source), ntohl(packet_ids_seen[i].packet_id));
 		if((packet_ids_seen[i].packet_id == id) && (packet_ids_seen[i].source == src)){
 			//fprintf(stderr, "Definitely already saw this packet.....\n");
 			ret = 1;
@@ -754,7 +756,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
 			/* add packet ID as seen already! */
-			fprintf(stderr, "\n");
+			fprintf(stderr, "NOPE\n");
 			add_id_seen(l3_header->id, l3_header->src);
 			
 
@@ -775,8 +777,8 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			l3_header--; //move pointer back to original position
 			l3_header->ttl -= 1; //decrement ttl
 			
-			fprintf(stderr, "Forwarding this back out!!!\n\n\n");
-			fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
+			//fprintf(stderr, "Forwarding this back out!!!\n\n\n");
+			fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet
 		}
 		else{
 			fprintf(stderr, " YUP!\n");
