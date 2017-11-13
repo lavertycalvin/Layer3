@@ -711,6 +711,9 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	fnaddr_t src   = l3_header->src;
 	
 	
+	fish_debugframe(7, "Received packet", l3frame, 3, len, 9);
+	
+	
 	/* as per bellardo's notes: */
 	if(l3_header->src == ALL_NEIGHBORS){
 		fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
@@ -721,7 +724,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
 		//fprintf(stderr, "This packet is meant for me!\n");
-		fish_debugframe(FISH_DEBUG_ALL, "FOR ME!!!", l3frame, 3, len, L3_PROTO_DV);
+		//fish_debugframe(FISH_DEBUG_ALL, "FOR ME!!!", l3frame, 3, len, L3_PROTO_DV);
 		
 		/* check if dv packet */
 		if(l3_header->proto == L3_PROTO_DV){
@@ -750,7 +753,6 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			fprintf(stderr, "\n");
 			add_id_seen(l3_header->id, l3_header->src);
 			
-			fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len, 9);
 
 			if(l3_header->proto == L3_PROTO_DV){
 				l3_header++; //move pointer to l3 header along
@@ -768,6 +770,8 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); //pass up network stack
 			l3_header--; //move pointer back to original position
 			l3_header->ttl -= 1; //decrement ttl
+			
+			fprintf(stderr, "Forwarding this back out!!!\n\n\n");
 			fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
 		}
 		else{
@@ -776,10 +780,10 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		}
 	}
 	else{
-		fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
+		//fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 		//fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
 		l3_header->ttl -= 1;
-		fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
+		//fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 		fish_l3.fish_l3_forward(l3frame, len);
 	}	
 	return ret;
