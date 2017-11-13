@@ -29,7 +29,7 @@ fishnode-$(EXEC_SUFFIX): fishnode.c
 	$(CC) $(CFLAGS) $(OSINC) $(OSLIB) $(OSDEF) -o $@ fishnode.c smartalloc.c libfish-$(EXEC_SUFFIX).a -lpcap
 
 handin: README
-	handin bellardo 464_p3 README smartalloc.c smartalloc.h checksum.c checksum.h fishnode.c fishnode.h Makefile
+	handin bellardo 464_p3 README libfish-Darwin-i386.a libfish-Linux-x86_64.a smartalloc.c fish.h smartalloc.h fishnode.c fishnode.h Makefile
 
 clean:
 	-rm -rf fishnode-* fishnode-*.dSYM
