@@ -742,7 +742,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
+		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
 		/* and received by node previously, drop with no FCMP message */
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
@@ -856,7 +856,6 @@ int my_fish_l3_forward(void *l3frame, int len){
 	}
 	/* use fish_l2_send to send the frame to the next-hop neighbor indicated by the forwarding table */
 	//fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
-	add_id_seen(l3_header->id, l3_header->src);
 	fish_l2.fish_l2_send(l3frame, next_hop, len); 
 
 	/* do we need to add the frame to the routing table here too? */
