@@ -35,6 +35,16 @@ uint32_t *packet_ids_seen;
 /* ========================================================= */
 /* =================== Helper functions! =================== */
 /* ========================================================= */
+int in_neighbor_table(fnaddr_t address){
+	int i = 0;
+	for(; i < my_neighbor_table_size; i++){
+		if(my_neighbor_table[i].valid && (my_neighbor_table[i].neigh == address)){
+			return 1;
+		}
+	}
+	return 0;
+}
+
 void clear_packet_id_table(){
 	free(packet_ids_seen);
 	packet_ids_seen = calloc(sizeof(uint32_t), 512);
@@ -343,6 +353,12 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 	my_dv_table[i].state    = state;
 	my_dv_table[i].dest     = dest;
 	my_dv_table[i].next_hop = next_hop;
+	if(metric >= MAX_TTL){
+		my_dv_table[i].metric = MAX_TTL;
+	}
+	else{
+		my_dv_table[i].metric = metric + 1;
+	}
 	my_dv_table[i].metric   = metric + 1;
         my_dv_table[i].ttl      = 180;	
 
@@ -479,16 +495,26 @@ void advertise_dv(){
 	fish_scheduleevent(30000, advertise_dv, 0);
 }
 
+int find_num_adv(){
+	int ret = 0;
+	int i = 0;
+	for(; i < my_dv_table_size; i++){
+		//only send valid active or backup routes
+		if(my_dv_table[i].valid && my_dv_table[i].state == 'A'){
+			ret += 1;
+		}
+
+	}
+	if(ret >= MAX_ADV_IN_PACKET){
+		ret = MAX_ADV_IN_PACKET;
+	}
+	return ret;
+}
+
 /* neighbor is needed for the split horizon implementation */
 void send_full_dv_advertisement(fnaddr_t neighbor){
 	//check to see how many advertisements we are making
-	int num_adv_sending = 0;
-	if(num_dv_stored > MAX_ADV_IN_PACKET){
-		num_adv_sending = MAX_ADV_IN_PACKET;	
-	}
-	else{
-		num_adv_sending = num_dv_stored;
-	}
+	int num_adv_sending = find_num_adv();
 	fprintf(stderr, "\n\n"
 			"======================================\n"
 			"SENDING %d advertisements to %s\n"
@@ -504,18 +530,19 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 		fprintf(stderr, "TRYING TO SEND A DV UPDATE AND IT FAILED :( Exiting....\n");
 		exit(2342234);
 	}
-	
-	neigh_adv->num_adv = htons(num_adv_sending);	
+	neigh_adv->num_adv = ntohs(num_adv_sending);	
 	
  	int i = 0;
 	int adv_added = 0;
 	for(; i < my_dv_table_size; i++){
 		//only send valid active or backup routes
-		if(my_dv_table[i].valid){
+		if(my_dv_table[i].valid && my_dv_table[i].state == 'A'){
 			//add this to the dv packet that we malloced!!!!
 			fill_this->dest = my_dv_table[i].dest;
 			if(my_dv_table[i].next_hop == neighbor){
 				//advertise as unreachable since learned from this interface
+				//fprintf(stderr, "Sending to neighbor %s, need to mark this as MAX_TTL!!!\n", fn_ntoa(neighbor));
+				
 				fill_this->metric = htonl(MAX_TTL);
 			}
 			else{
@@ -535,7 +562,7 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 			adv_added++;
 			fill_this++;
 			//if we already added all of our advertisements we can stop
-			if(adv_added == num_adv_sending){
+			if(adv_added >=  num_adv_sending){
 				break;
 			}
 		}
@@ -543,13 +570,13 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 	}
 	//pass to lvl 3
 	if(num_adv_sending == 0){
-		fprintf(stderr, "ARE WE FAILING BEFORE FREEING NOTHING???\n");
+		//fprintf(stderr, "ARE WE FAILING BEFORE FREEING NOTHING???\n");
 		//free(l4frame);	
 	}
 	else{
-		fprintf(stderr, "ARE WE FAILING BEFORE WE SEND THE DV ADVERTISEMETN???\n");
+		//fprintf(stderr, "ARE WE FAILING BEFORE WE SEND THE DV ADVERTISEMETN???\n");
 		fish_l3.fish_l3_send(neigh_adv, 2 + (num_adv_sending * sizeof(struct dv_adv)), neighbor, L3_PROTO_DV, 1);
-		fprintf(stderr, "ARE WE FAILING AT THIS POINT????\n");
+		//fprintf(stderr, "ARE WE FAILING AT THIS POINT????\n");
 		//free(l4frame);
 	}
 }
@@ -583,6 +610,8 @@ void print_my_neighbor_table(){
 		}
        }
 }
+
+
 
 void decrement_neighbor_table(){
 	//decrement the ttl on every valid neighbor!
@@ -698,6 +727,14 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	int proto = l3_header->proto;
 	fnaddr_t src   = l3_header->src;
 	
+	
+	/* as per bellardo's notes: */
+	if(l3_header->src == ALL_NEIGHBORS){
+		fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
+		return 0;
+	}
+	
+	
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
 		//fprintf(stderr, "This packet is meant for me!\n");
@@ -717,21 +754,20 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		l3_header++; //move pointer to l3 header along
 		
 		fprintf(stderr, "Sending this packet to lvl4 of this fishnode!\n");
-		fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
+		ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
 	}
 	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously...\n");
+		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
 		/* and received by node previously, drop with no FCMP message */
-		
-		/* print out this frame... seems odd. */
-		fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len, 9);
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
 			/* add packet ID as seen already! */
+			fprintf(stderr, "\n");
 			add_id_seen(l3_header->id);
 			
+			fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len, 9);
 
 			if(l3_header->proto == L3_PROTO_DV){
 				l3_header++; //move pointer to l3 header along
@@ -752,7 +788,8 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
 		}
 		else{
-			fprintf(stderr, "WE already saw this one!!!\n");
+			fprintf(stderr, " YUP!\n");
+			return 0;
 		}
 	}
 	else{
