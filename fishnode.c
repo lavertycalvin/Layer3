@@ -414,6 +414,10 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 	/* go through each advertisement and check the dv table to see if they already exist 
 	 * ----> will handle all management of forwarding table
 	 */
+	if(ntohs(dv->num_adv) == 0){
+		add_neighbor_to_table(dv_packet_source);
+	}
+	
 	while(i < ntohs(dv->num_adv)){
 		/* calc the netmask */
 		/* check out the metric */

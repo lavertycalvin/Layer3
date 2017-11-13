@@ -105,7 +105,7 @@ struct dv_packet{
 
 
 /* functions */
-
+void add_neighbor_to_table(fnaddr_t neigh);
 /* base functionality */
 int my_fishnode_l3_receive(void *l3frame, int len);
 int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, uint8_t ttl);
