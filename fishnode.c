@@ -71,7 +71,7 @@ int received_previously(fnaddr_t src, uint32_t id){
 	int i = 0;
 	for(; i < num_packet_ids_stored; i++){
 		if((packet_ids_seen[i].packet_id == id) && (packet_ids_seen[i].source == src)){
-			fprintf(stderr, "Definitely already saw this packet.....\n");
+			//fprintf(stderr, "Definitely already saw this packet.....\n");
 			ret = 1;
 		}
 	}
@@ -716,7 +716,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	
 	/* as per bellardo's notes: */
 	if(l3_header->src == ALL_NEIGHBORS){
-		fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
+		//fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
 		return 0;
 	}
 	
@@ -745,7 +745,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
+		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
 		/* and received by node previously, drop with no FCMP message */
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
