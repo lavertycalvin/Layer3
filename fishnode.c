@@ -47,7 +47,7 @@ int in_neighbor_table(fnaddr_t address){
 
 void clear_packet_id_table(){
 	free(packet_ids_seen);
-	packet_ids_seen = calloc(sizeof(uint32_t), 512);
+	packet_ids_seen = calloc(sizeof(struct packet_check), 512);
 	if(packet_ids_seen == NULL){
 		fprintf(stderr, "Unable to re-initialize packet ids seen array with 512 entries! Exiting!\n");
 		exit(53);
@@ -65,33 +65,15 @@ void add_id_seen(uint32_t id, fnaddr_t src){
 	num_packet_ids_stored++;	
 }
 
-/* checks to see if the id is seen, returns 1 if already stored, 0 otherwise */
-uint8_t check_id_seen(uint32_t id, fnaddr_t src){
-	uint8_t ret = 0;
+
+int received_previously(fnaddr_t src, uint32_t id){
+	int ret = 0;
 	int i = 0;
 	for(; i < num_packet_ids_stored; i++){
-		if((packet_ids_seen[i].packet_id == id) &&(packet_ids_seen[i].source == src)){
-			//fprintf(stderr, "Definitely already saw this packet.....\n");
+		if((packet_ids_seen[i].packet_id == id) && (packet_ids_seen[i].source == src)){
+			fprintf(stderr, "Definitely already saw this packet.....\n");
 			ret = 1;
 		}
-	}
-	return ret;
-}
-
-int received_previously(fnaddr_t source, uint32_t packet_id){
-	int ret = 0;
-	if(source == ALL_NEIGHBORS){
-		/*check to see if we already recieved this packet id! */
-		ret = check_id_seen(packet_id, source);
-		//fprintf(stderr, "Source address was broadcast, not forwarding!\n");
-	}
-	else if(source == fish_getaddress()){
-		//fprintf(stderr, "Source address was mine, so no need to forward!!\n");
-		ret = 1;
-	}
-	else{
-		//fprintf(stderr, "Source was not us or broadcast.... is that right?\n");
-		ret = check_id_seen(packet_id, source);
 	}
 	return ret;
 }
