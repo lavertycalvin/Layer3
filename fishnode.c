@@ -30,7 +30,7 @@ struct dv_entry *my_dv_table;
 
 
 void *stored_route_keys;
-uint32_t *packet_ids_seen;
+struct packet_check *packet_ids_seen;
 
 /* ========================================================= */
 /* =================== Helper functions! =================== */
@@ -56,20 +56,21 @@ void clear_packet_id_table(){
 
 }
 
-void add_id_seen(uint32_t id){
+void add_id_seen(uint32_t id, fnaddr_t src){
 	if(num_packet_ids_stored == MAX_IDS_SEEN){
 		clear_packet_id_table();
 	}	
-	packet_ids_seen[num_packet_ids_stored] = id;
+	packet_ids_seen[num_packet_ids_stored].packet_id = id;
+	packet_ids_seen[num_packet_ids_stored].source = src;
 	num_packet_ids_stored++;	
 }
 
 /* checks to see if the id is seen, returns 1 if already stored, 0 otherwise */
-uint8_t check_id_seen(uint32_t id){
+uint8_t check_id_seen(uint32_t id, fnaddr_t src){
 	uint8_t ret = 0;
 	int i = 0;
 	for(; i < num_packet_ids_stored; i++){
-		if(packet_ids_seen[i] == id){
+		if((packet_ids_seen[i].packet_id == id) &&(packet_ids_seen[i].source == src)){
 			//fprintf(stderr, "Definitely already saw this packet.....\n");
 			ret = 1;
 		}
@@ -81,7 +82,7 @@ int received_previously(fnaddr_t source, uint32_t packet_id){
 	int ret = 0;
 	if(source == ALL_NEIGHBORS){
 		/*check to see if we already recieved this packet id! */
-		ret = check_id_seen(packet_id);
+		ret = check_id_seen(packet_id, source);
 		//fprintf(stderr, "Source address was broadcast, not forwarding!\n");
 	}
 	else if(source == fish_getaddress()){
@@ -90,7 +91,7 @@ int received_previously(fnaddr_t source, uint32_t packet_id){
 	}
 	else{
 		//fprintf(stderr, "Source was not us or broadcast.... is that right?\n");
-		ret = check_id_seen(packet_id);
+		ret = check_id_seen(packet_id, source);
 	}
 	return ret;
 }
@@ -724,7 +725,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	int ret = 1;
 
 	struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;
-	int proto = l3_header->proto;
+	int proto      = l3_header->proto;
 	fnaddr_t src   = l3_header->src;
 	
 	
@@ -738,7 +739,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	/* If l3 dest is node's l3 addr, remove l3 header and pass to l4 code */
 	if(l3_header->dest == fish_getaddress()){
 		//fprintf(stderr, "This packet is meant for me!\n");
-		fish_debugframe(FISH_DEBUG_ALL, "FOR ME!!!", l3frame, 3, len + L3_HEADER_LENGTH, L3_PROTO_DV);
+		fish_debugframe(FISH_DEBUG_ALL, "FOR ME!!!", l3frame, 3, len, L3_PROTO_DV);
 		
 		/* check if dv packet */
 		if(l3_header->proto == L3_PROTO_DV){
@@ -765,7 +766,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		if(!received_previously(l3_header->src, l3_header->id)){
 			/* add packet ID as seen already! */
 			fprintf(stderr, "\n");
-			add_id_seen(l3_header->id);
+			add_id_seen(l3_header->id, l3_header->src);
 			
 			fish_debugframe(7, "BROADCAST DEST???", l3frame, 3, len, 9);
 
@@ -793,10 +794,10 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		}
 	}
 	else{
-		fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len + (sizeof(struct fishnet_l3_header)), L3_PROTO_DV);
+		fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 		//fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
 		l3_header->ttl -= 1;
-		fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len + (sizeof(struct fishnet_l3_header)), L3_PROTO_DV);
+		fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 		ret = fish_l3.fish_l3_forward(l3frame, len);
 	}	
 	return ret;
@@ -826,7 +827,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	l3_header->src   = fish_getaddress(); 
 	l3_header->dest  = dst_addr;
 	
-	add_id_seen(l3_header->id);
+	add_id_seen(l3_header->id, fish_getaddress());
 
 	
 	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
@@ -873,7 +874,7 @@ int my_fish_l3_forward(void *l3frame, int len){
 	}
 	/* use fish_l2_send to send the frame to the next-hop neighbor indicated by the forwarding table */
 	//fprintf(stderr, "Sending the packet to hop %s with length %d\n", fn_ntoa(next_hop), len);
-	add_id_seen(l3_header->id);
+	add_id_seen(l3_header->id, l3_header->src);
 	fish_l2.fish_l2_send(l3frame, next_hop, len); 
 
 	/* do we need to add the frame to the routing table here too? */
@@ -1138,7 +1139,7 @@ int main(int argc, char **argv)
 	my_forwarding_table_size = 256;
 
 	/* initialize our struct of packet ids seen */
-	packet_ids_seen = calloc(sizeof(uint32_t), 512);
+	packet_ids_seen = calloc(sizeof(struct packet_check), 512);
 	if(packet_ids_seen == NULL){
 		fprintf(stderr, "Unable to initialize packet ids seen array with 512 entries! Exiting!\n");
 		exit(53);

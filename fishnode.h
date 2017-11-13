@@ -64,6 +64,11 @@ struct dv_entry{
 };
 
 
+struct packet_check{
+	uint32_t packet_id;
+	fnaddr_t source;
+};
+
 struct fishnet_l3_header{
 	uint8_t 	ttl;
 	uint8_t 	proto;
