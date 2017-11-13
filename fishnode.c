@@ -786,7 +786,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); //pass up network stack
 			l3_header--; //move pointer back to original position
 			l3_header->ttl -= 1; //decrement ttl
-			ret += fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
+			fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet	
 		}
 		else{
 			fprintf(stderr, " YUP!\n");
@@ -798,7 +798,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		//fprintf(stderr, "Not broadcast or for us, decrement ttl and forward!\n");
 		l3_header->ttl -= 1;
 		fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
-		ret = fish_l3.fish_l3_forward(l3frame, len);
+		fish_l3.fish_l3_forward(l3frame, len);
 	}	
 	return ret;
 }
