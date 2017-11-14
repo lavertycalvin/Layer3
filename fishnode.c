@@ -17,6 +17,7 @@ int num_forwarding_table_entries = 0;
 int my_forwarding_table_size = 0;
 
 int num_packet_ids_stored = 0;
+int packet_ids_seen_size  = 1024;
 
 int num_neighbors_stored = 0;
 int my_neighbor_table_size = 0;
@@ -45,20 +46,22 @@ int in_neighbor_table(fnaddr_t address){
 	return 0;
 }
 
-void clear_packet_id_table(){
-	free(packet_ids_seen);
-	packet_ids_seen = calloc(sizeof(struct packet_check), 512);
+void double_packet_id_table(){
+	fprintf(stderr, "\n\n\n\n\n===================== DOUBLING PACKET CHECKS ===================\n\n\n\n\n");
+	packet_ids_seen_size *= 2;
+	packet_ids_seen = realloc(packet_ids_seen, sizeof(struct packet_check) *  packet_ids_seen_size);
 	if(packet_ids_seen == NULL){
-		fprintf(stderr, "Unable to re-initialize packet ids seen array with 512 entries! Exiting!\n");
+		fprintf(stderr, "Unable to re-initialize packet ids seen array with %d entries! Exiting!\n", packet_ids_seen_size);
 		exit(53);
 	}
+	sleep(30);
 	num_packet_ids_stored = 0;
 
 }
 
 void add_id_seen(uint32_t id, fnaddr_t src){
 	if(num_packet_ids_stored == MAX_IDS_SEEN){
-		clear_packet_id_table();
+		double_packet_id_table();
 	}	
 	packet_ids_seen[num_packet_ids_stored].packet_id = id;
 	packet_ids_seen[num_packet_ids_stored].source = src;
@@ -758,7 +761,6 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			/* add packet ID as seen already! */
 			fprintf(stderr, "NOPE\n");
 			add_id_seen(l3_header->id, l3_header->src);
-			
 
 			if(l3_header->proto == L3_PROTO_DV){
 				l3_header++; //move pointer to l3 header along
@@ -1130,7 +1132,7 @@ int main(int argc, char **argv)
 	my_forwarding_table_size = 256;
 
 	/* initialize our struct of packet ids seen */
-	packet_ids_seen = calloc(sizeof(struct packet_check), 512);
+	packet_ids_seen = calloc(sizeof(struct packet_check), packet_ids_seen_size);
 	if(packet_ids_seen == NULL){
 		fprintf(stderr, "Unable to initialize packet ids seen array with 512 entries! Exiting!\n");
 		exit(53);
