@@ -54,13 +54,10 @@ void double_packet_id_table(){
 		fprintf(stderr, "Unable to re-initialize packet ids seen array with %d entries! Exiting!\n", packet_ids_seen_size);
 		exit(53);
 	}
-	sleep(30);
-	num_packet_ids_stored = 0;
-
 }
 
 void add_id_seen(uint32_t id, fnaddr_t src){
-	if(num_packet_ids_stored == MAX_IDS_SEEN){
+	if(num_packet_ids_stored >= packet_ids_seen_size){
 		double_packet_id_table();
 	}	
 	packet_ids_seen[num_packet_ids_stored].packet_id = id;
@@ -76,7 +73,6 @@ int received_previously(fnaddr_t src, uint32_t id){
 	for(; i < num_packet_ids_stored; i++){
 		fprintf(stderr, "\tEntry %d: %s\t %d\n", i, fn_ntoa(packet_ids_seen[i].source), ntohl(packet_ids_seen[i].packet_id));
 		if((packet_ids_seen[i].packet_id == id) && (packet_ids_seen[i].source == src)){
-			//fprintf(stderr, "Definitely already saw this packet.....\n");
 			ret = 1;
 		}
 	}
