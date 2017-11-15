@@ -17,7 +17,7 @@ int num_forwarding_table_entries = 0;
 int my_forwarding_table_size = 0;
 
 int num_packet_ids_stored = 0;
-int packet_ids_seen_size  = 1024;
+int packet_ids_seen_size  = 10;
 
 int num_neighbors_stored = 0;
 int my_neighbor_table_size = 0;
@@ -70,9 +70,9 @@ int received_previously(fnaddr_t src, uint32_t id){
 	int ret = 0;
 	int i = 0;
 	fprintf(stderr, "\nLooking for match: %s\t%d\n", fn_ntoa(src), ntohl(id));
-	for(; i < num_packet_ids_stored; i++){
-		fprintf(stderr, "\tEntry %d: %s\t %d\n", i, fn_ntoa(packet_ids_seen[i].source), ntohl(packet_ids_seen[i].packet_id));
+	for(; i < packet_ids_seen_size; i++){
 		if((packet_ids_seen[i].packet_id == id) && (packet_ids_seen[i].source == src)){
+			fprintf(stderr, "\tEntry %d: %s\t %d MATCHES!!!\n\n\n", i, fn_ntoa(packet_ids_seen[i].source), ntohl(packet_ids_seen[i].packet_id));
 			ret = 1;
 		}
 	}
@@ -240,7 +240,7 @@ void resize_dv_table(){
 	
 	my_dv_table = realloc(my_dv_table, my_dv_table_size * sizeof(struct dv_entry));
        	if(my_dv_table == NULL){
-		fprintf(stderr, "Unable to realloc for dv table of size %d. Exiting...\n", my_dv_table_size);
+		//fprintf(stderr, "Unable to realloc for dv table of size %d. Exiting...\n", my_dv_table_size);
 		exit(1231);
 	}
 }
@@ -248,9 +248,9 @@ void resize_dv_table(){
 
 void update_dv_table(struct dv_entry *entry, int new_metric){
 	//we are already gaurenteed it exists!
-	fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
+	//fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
 	if(new_metric >= MAX_TTL){
-		fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
+		//fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
 		new_metric = MAX_TTL;
 		entry->state = 'W';
 		if(entry->in_forwarding_table){
@@ -263,7 +263,7 @@ void update_dv_table(struct dv_entry *entry, int new_metric){
 	}
 	if(entry->in_forwarding_table){
 		//update entry in the forwarding table
-		fprintf(stderr, "Used in the forwarding table, need to update this entry!\n");
+		//fprintf(stderr, "Used in the forwarding table, need to update this entry!\n");
 	}
 
 }
@@ -289,8 +289,8 @@ int in_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric){
 		if(my_dv_table[i].valid){
 			//check if duplicate 
 			if((my_dv_table[i].dest == dest) && (my_dv_table[i].next_hop == next_hop)){
-				fprintf(stderr, "\t\t%s with next hop ", fn_ntoa(dest)); 
-				fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
+				//fprintf(stderr, "\t\t%s with next hop ", fn_ntoa(dest)); 
+				//fprintf(stderr, "%s is already in dv table!\n", fn_ntoa(next_hop));
 				if(metric != my_dv_table[i].metric){
 					//we need to update metric!!!!!
 					present = DV_UPDATE;
@@ -350,14 +350,14 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 
 	//check to see if destination is already in the forwarding table
 	if(!in_forwarding_table(dest)){
-		fprintf(stderr, "%s is not in forwarding table, ", fn_ntoa(dest)); 
-		fprintf(stderr, "adding with next hop: %s!\n", fn_ntoa(next_hop));	
+		//fprintf(stderr, "%s is not in forwarding table, ", fn_ntoa(dest)); 
+		//fprintf(stderr, "adding with next hop: %s!\n", fn_ntoa(next_hop));	
 		my_dv_table[i].fwd_table_ptr = fish_fwd.add_fwtable_entry(dest, find_prefix_length(netmask), next_hop, metric, 'D', 0);
 		my_dv_table[i].in_forwarding_table = 1;
 	}
 	else{
 		//if so, check to see if this metric is better!
-		fprintf(stderr, "%s already in forwarding table... is this a better metric????\n", fn_ntoa(dest));
+		//fprintf(stderr, "%s already in forwarding table... is this a better metric????\n", fn_ntoa(dest));
 		//if this one is better, remove the other from the forwarding table
 		//replace_forwarding_table();
 	}	
@@ -373,8 +373,8 @@ void decrement_dv_table(){
 		if((my_dv_table[i].ttl == 0) && my_dv_table[i].valid){
 			//decide to mark as withdrawn or remove
 			if((my_dv_table[i].state == 'A') || (my_dv_table[i].state == 'B')){
-				fprintf(stderr, "Marking %s with next ", fn_ntoa(my_dv_table[i].dest)); 
-				fprintf(stderr, "hop %s as stale!\n", fn_ntoa(my_dv_table[i].next_hop));
+				//fprintf(stderr, "Marking %s with next ", fn_ntoa(my_dv_table[i].dest)); 
+				//fprintf(stderr, "hop %s as stale!\n", fn_ntoa(my_dv_table[i].next_hop));
 				//if state is 'A' and moving to 'W', update the shortest backup route to 'A'
 				if(my_dv_table[i].state == 'A' && my_dv_table[i].in_forwarding_table){
 					replace_forwarding_table(&my_dv_table[i], MAX_TTL);
@@ -389,7 +389,7 @@ void decrement_dv_table(){
 			else if(my_dv_table[i].state == 'W'){
 				//shouldn't be in the forwarding table, just mark as invalid
 				//should stop advertising this thing
-				fprintf(stderr, "Removing %s from dv table!!\n", fn_ntoa(my_dv_table[i].dest));
+				//fprintf(stderr, "Removing %s from dv table!!\n", fn_ntoa(my_dv_table[i].dest));
 				my_dv_table[i].valid = 0;
 			}
 		}
@@ -402,12 +402,11 @@ void decrement_dv_table(){
 void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 	/* callback data SHOULD	be a dv frame entry */
 	
-	int prefix_length = 0, dv_process = 0;
-	char connection_type = 5;
+	int dv_process = 0;
 	struct dv_packet *dv = (struct dv_packet *)dv_frame;
-	fprintf(stderr, "\nDV PACKET\n"
-			"\tPacket Source is: %s\n"
-			"\tNumber of adv in this packet: %d\n", fn_ntoa(dv_packet_source), ntohs(dv->num_adv));
+	//fprintf(stderr, "\nDV PACKET\n"
+	//		"\tPacket Source is: %s\n"
+	//		"\tNumber of adv in this packet: %d\n", fn_ntoa(dv_packet_source), ntohs(dv->num_adv));
 	int i = 0;
 	struct dv_adv *advertisement = &dv->adv_packets; //set the advertisement to point to the packets 
 	
@@ -424,36 +423,35 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 		/* check out the metric */
 		/*
 		 */
-		fprintf(stderr, "\n\tAdvertisement number %d:\n"
-				"\t\tDest is: %s\n", i, fn_ntoa(advertisement->dest));
-		fprintf(stderr, "\t\tNetmask: %s\n"
-				"\t\tMetric : %d\n",
-				fn_ntoa(advertisement->netmask),
-				ntohl(advertisement->metric));
-		prefix_length = find_prefix_length(ntohl(advertisement->netmask));
+		//fprintf(stderr, "\n\tAdvertisement number %d:\n"
+		//		"\t\tDest is: %s\n", i, fn_ntoa(advertisement->dest));
+		//fprintf(stderr, "\t\tNetmask: %s\n"
+		//		"\t\tMetric : %d\n",
+		//		fn_ntoa(advertisement->netmask),
+		//		ntohl(advertisement->metric));
+		//prefix_length = find_prefix_length(ntohl(advertisement->netmask));
 		/* connection type should be DV since it's a dv packet.... */
-		connection_type = 'D';
-		fprintf(stderr, "\t\tConnection type: %c\n"
-				"\t\tPrefix Length  : %d\n",
-				connection_type, prefix_length);
+		//fprintf(stderr, "\t\tConnection type: %c\n"
+		//		"\t\tPrefix Length  : %d\n",
+		//		connection_type, prefix_length);
 		dv_process = in_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric));
 		
 		if((dv_process == 0) && (ntohl(advertisement->metric) == MAX_TTL)){
 			//not in the table and the node is unreachable... ignore
-			fprintf(stderr, "\t\t\tIGNORING THIS ENTRY!\n");
+			//fprintf(stderr, "\t\t\tIGNORING THIS ENTRY!\n");
 		}
 		else if(dv_process == 0){
 			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric), advertisement->netmask, 'A');
 		}
 	  	else if(dv_process == DV_UPDATE){
-			fprintf(stderr, "\t\t\tWe need to update the metric an entry!\n");	
+			//fprintf(stderr, "\t\t\tWe need to update the metric an entry!\n");	
 		}
 		else if(dv_process == DV_BACKUP){
-			fprintf(stderr, "\t\t\tWe need to add a backup an entry!\n");	
+			//fprintf(stderr, "\t\t\tWe need to add a backup an entry!\n");	
 			add_to_dv_table(advertisement->dest, dv_packet_source, ntohl(advertisement->metric), advertisement->netmask, 'B');
 		}
 		else{
-			fprintf(stderr, "\t\t\tThis is already in the forwarding table, nothing needs to be done!\n");
+			//fprintf(stderr, "\t\t\tThis is already in the forwarding table, nothing needs to be done!\n");
 		}
 		
 		advertisement++;
@@ -465,7 +463,7 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 void send_blank_dv_advertisement(){
 	void *l4frame = malloc(sizeof(struct dv_packet) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
 	if(l4frame == NULL){
-		fprintf(stderr, "Unable to malloc for empty dv advertisement, Exiting... \n");
+		//fprintf(stderr, "Unable to malloc for empty dv advertisement, Exiting... \n");
 		exit(445);
 	}
 	l4frame += L2_HEADER_LENGTH + L3_HEADER_LENGTH;
@@ -478,7 +476,7 @@ void send_blank_dv_advertisement(){
 }
 
 void advertise_dv(){
-	fprintf(stderr, "\nBROADCASTING WITH 0 ADVERTISEMENTS!\n");
+	//fprintf(stderr, "\nBROADCASTING WITH 0 ADVERTISEMENTS!\n");
 	send_blank_dv_advertisement();
 	fish_scheduleevent(30000, advertise_dv, 0);
 }
@@ -503,11 +501,11 @@ int find_num_adv(){
 void send_full_dv_advertisement(fnaddr_t neighbor){
 	//check to see how many advertisements we are making
 	int num_adv_sending = find_num_adv();
-	fprintf(stderr, "\n\n"
-			"======================================\n"
-			"SENDING %d advertisements to %s\n"
-			"======================================\n\n",
-			num_adv_sending, fn_ntoa(neighbor));
+	//fprintf(stderr, "\n\n"
+	//		"======================================\n"
+	//		"SENDING %d advertisements to %s\n"
+	//		"======================================\n\n",
+	//		num_adv_sending, fn_ntoa(neighbor));
 	//malloc for our dv packet
 	void *l4frame = malloc((sizeof(struct dv_adv) * num_adv_sending) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
 	l4frame += L2_HEADER_LENGTH + L3_HEADER_LENGTH; //move the frame along, thanks a lot!
@@ -515,7 +513,7 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 	struct dv_packet *neigh_adv = (struct dv_packet *)l4frame;
 	struct dv_adv *fill_this = &neigh_adv->adv_packets;
 	if(neigh_adv == NULL){
-		fprintf(stderr, "TRYING TO SEND A DV UPDATE AND IT FAILED :( Exiting....\n");
+		//fprintf(stderr, "TRYING TO SEND A DV UPDATE AND IT FAILED :( Exiting....\n");
 		exit(2342234);
 	}
 	neigh_adv->num_adv = ntohs(num_adv_sending);	
@@ -538,14 +536,14 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 			}
 			fill_this->netmask = ALL_NEIGHBORS;
 			
-			fprintf(stderr, "\n"
-					"\tHERES ADVERTISEMENT %d:\n"
-					"\t\tDest  : %s\n"
-					"\t\tMetric: %d\n",
-					adv_added,
-					fn_ntoa(fill_this->dest),
-					ntohl(fill_this->metric));
-			fprintf(stderr, "\t\tLearned this from: %s\n\n", fn_ntoa(my_dv_table[i].next_hop));
+			//fprintf(stderr, "\n"
+			//		"\tHERES ADVERTISEMENT %d:\n"
+			//		"\t\tDest  : %s\n"
+			//		"\t\tMetric: %d\n",
+			//		adv_added,
+			//		fn_ntoa(fill_this->dest),
+			//		ntohl(fill_this->metric));
+			//fprintf(stderr, "\t\tLearned this from: %s\n\n", fn_ntoa(my_dv_table[i].next_hop));
 
 			adv_added++;
 			fill_this++;
@@ -623,7 +621,7 @@ void resize_neighbor_table(){
 
 	my_neighbor_table = realloc(my_neighbor_table, my_neighbor_table_size * sizeof(struct neighbor_entry)); 
 	if(my_neighbor_table == NULL){
-		fprintf(stderr, "Unable to double the size of the neighbor table to %d! Exiting...\n", my_neighbor_table_size);
+		//fprintf(stderr, "Unable to double the size of the neighbor table to %d! Exiting...\n", my_neighbor_table_size);
 		exit(1234);
 	}
 
@@ -658,7 +656,7 @@ void add_neighbor_to_table(fnaddr_t neigh){
 void send_neigh_response(fnaddr_t source){
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	if(neighbor_packet == NULL){
-		fprintf(stderr, "Unable to malloc for neighbor response packet, Exiting!\n");
+		//fprintf(stderr, "Unable to malloc for neighbor response packet, Exiting!\n");
 		exit(667);
 	}
 	neighbor_packet += L2_HEADER_LENGTH + L3_HEADER_LENGTH;//set pointer to point to neigh packet
@@ -673,7 +671,7 @@ void send_neigh_request(){
 	void *neighbor_packet = malloc(L2_HEADER_LENGTH + L3_HEADER_LENGTH + sizeof(struct neighbor_header));
 	
 	if(neighbor_packet == NULL){
-		fprintf(stderr, "Unable to malloc for neighbor request packet, Exiting!\n");
+		//fprintf(stderr, "Unable to malloc for neighbor request packet, Exiting!\n");
 		exit(666);
 	}
 	neighbor_packet += L2_HEADER_LENGTH + L3_HEADER_LENGTH;//set pointer to point to neigh packet
@@ -712,17 +710,16 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	int ret = 1;
 
 	struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;
-	int proto      = l3_header->proto;
+	uint8_t proto  = l3_header->proto;
 	fnaddr_t src   = l3_header->src;
 	
 	
-	fish_debugframe(7, "Received packet", l3frame, 3, len, 9);
 	
 	
 	/* as per bellardo's notes: */
 	if(l3_header->src == ALL_NEIGHBORS){
 		//fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
-		return 1;
+		return 0;
 	}
 	
 	
@@ -744,20 +741,21 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		}	
 		l3_header++; //move pointer to l3 header along
 		
-		fprintf(stderr, "Sending this packet to lvl4 of this fishnode!\n");
+		//fprintf(stderr, "Sending this packet to lvl4 of this fishnode!\n");
 		ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); 
 	}
 	
 	/* if l3 dest is broadcast ... */
 	else if(l3_header->dest == ALL_NEIGHBORS){
-		fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
+		//fprintf(stderr, "Dest is Broadcast. Checking if received by node previously... ");
 		/* and received by node previously, drop with no FCMP message */
 		
 		if(!received_previously(l3_header->src, l3_header->id)){
 			/* add packet ID as seen already! */
-			fprintf(stderr, "NOPE\n");
+			//fprintf(stderr, "NOPE\n");
 			add_id_seen(l3_header->id, l3_header->src);
 
+			//fish_debugframe(7, "Received packet", l3frame, 3, len, 9);
 			if(l3_header->proto == L3_PROTO_DV){
 				l3_header++; //move pointer to l3 header along
 				//fprintf(stderr, "Received a DV packet broadcast to all nodes\n");
@@ -773,14 +771,16 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 			l3_header++; //move pointer to l3 header along
 			ret = fish_l4.fish_l4_receive(l3_header, len - L3_HEADER_LENGTH, proto, src); //pass up network stack
 			l3_header--; //move pointer back to original position
+			//fish_debugframe(FISH_DEBUG_ALL, "BEFORE DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 			l3_header->ttl -= 1; //decrement ttl
+			//fish_debugframe(FISH_DEBUG_ALL, "AFTER DECREMENT TTL", l3frame, 3, len, L3_PROTO_DV);
 			
 			//fprintf(stderr, "Forwarding this back out!!!\n\n\n");
 			fish_l3.fish_l3_forward(l3frame, len); //forward back over fishnet
 		}
 		else{
 			fprintf(stderr, " YUP!\n");
-			return 1;
+			return 0;
 		}
 	}
 	else{
@@ -798,7 +798,8 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	
 	void *l3frame = malloc(sizeof(struct fishnet_l3_header) + len);
 	if(l3frame == NULL){
-		fprintf(stderr, "Failed to malloc for function: my_fish_l3_send\n");
+		//fprintf(stderr, "Failed to malloc for function: my_fish_l3_send\n");
+		exit(3434);
 	}
 	
 	l3frame += L3_HEADER_LENGTH; //move the pointer to start of l3 header
@@ -808,7 +809,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
         struct fishnet_l3_header *l3_header = (struct fishnet_l3_header *)l3frame;	
 	
 	if((ttl >= MAX_TTL) || (ttl == 0)){
-		fprintf(stderr, "setting ttl to MAX_TTL CAUSEOF THIS THING\n");
+		//fprintf(stderr, "setting ttl to MAX_TTL CAUSEOF THIS THING\n");
 		ttl = MAX_TTL;
 	}
 	l3_header->ttl   = ttl;
@@ -852,7 +853,7 @@ int my_fish_l3_forward(void *l3frame, int len){
 		next_hop = ALL_NEIGHBORS;
 	}
 	else{
-		fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
+		//fprintf(stderr, "Looking for best match in forwarding table for: %s\n", fn_ntoa(l3_header->dest)); 
 		next_hop = fish_fwd.longest_prefix_match(l3_header->dest);
 	}
 	/* if there is no route to the destination, drop the frame and generate correct FCMP error message */
@@ -912,7 +913,7 @@ void *my_remove_fwtable_entry(void *route_key){
 	/* route key is the address in the forwarding table
 	 * cast to an entry and mark as invalid then return the user data with it????
 	 */
-	fprintf(stderr, "Removing an entry from the forwarding table!\n");
+	//fprintf(stderr, "Removing an entry from the forwarding table!\n");
 	/* this is definitely not going to work! */
 	((struct forwarding_table_entry *)(route_key))->valid = 0; 	//mark as invalid
 	num_forwarding_table_entries--;		//decrement the number of entries in the table
@@ -922,7 +923,7 @@ void *my_remove_fwtable_entry(void *route_key){
 int my_update_fwtable_metric(void *route_key, int new_metric){
 	int update_successful = 1;
 	if(route_key == NULL){
-		fprintf(stderr, "WTF, this is a null pointer... how can we update?\n");
+		//fprintf(stderr, "WTF, this is a null pointer... how can we update?\n");
 		return 0;
 	}
 	/* this is definitely not going to work! */
@@ -942,20 +943,20 @@ fnaddr_t my_longest_prefix_match(fnaddr_t addr){
 		if(my_forwarding_table[i].valid){
 			/* DOES THE MASK HAVE TO BE IN NETWORK ORDER OR WHAT???? */
 			mask = ~((1 << (my_forwarding_table[i].prefix_length)) - 1);
-			fprintf(stderr, "Checking entry %d in the table\n", i);
-			fprintf(stderr, "\tMatching: %s to\n", fn_ntoa(my_forwarding_table[i].dest));
-			fprintf(stderr, "\tEntry   : %s\n", fn_ntoa(addr));
-			fprintf(stderr, "\tNetmask : %s\n"
-					"\tmask    : %d\n",
-					fn_ntoa(ntohl(mask)),
-					my_forwarding_table[i].prefix_length);
+			//fprintf(stderr, "Checking entry %d in the table\n", i);
+			//fprintf(stderr, "\tMatching: %s to\n", fn_ntoa(my_forwarding_table[i].dest));
+			//fprintf(stderr, "\tEntry   : %s\n", fn_ntoa(addr));
+			//fprintf(stderr, "\tNetmask : %s\n"
+			//		"\tmask    : %d\n",
+			//		fn_ntoa(ntohl(mask)),
+			//		my_forwarding_table[i].prefix_length);
 			//sleep(1);//temp addition to watch
 			/* mask off host bits of addr to compare to table entry */
 			if((htonl(mask) & (uint32_t)addr) == (uint32_t)my_forwarding_table[i].dest){
 				//fprintf(stderr, "Found a match of %d long!!!!!!\n\n", my_forwarding_table[i].prefix_length);
 				match_length = my_forwarding_table[i].prefix_length;
 				if(match_length >= best_match_length && (my_forwarding_table[i].metric < best_metric)){
-					fprintf(stderr, "\n\t\tFound a new best next hop %s!\n\n", fn_ntoa(my_forwarding_table[i].next_hop));
+					//fprintf(stderr, "\n\t\tFound a new best next hop %s!\n\n", fn_ntoa(my_forwarding_table[i].next_hop));
 					best_metric = my_forwarding_table[i].metric;
 					best_match = my_forwarding_table[i].next_hop;
 					best_match_length = match_length;
@@ -1030,9 +1031,9 @@ int main(int argc, char **argv)
 	 * =================================== 
 	
 	 * set functions to my custom pointers */
-	fish_l3.fish_l3_send = my_fish_l3_send;
+	//fish_l3.fish_l3_send = my_fish_l3_send;
 	fish_l3.fishnode_l3_receive = my_fishnode_l3_receive;
-	fish_l3.fish_l3_forward = my_fish_l3_forward;
+	//fish_l3.fish_l3_forward = my_fish_l3_forward;
 
 	/* custom pointers for advanced functionality */
 	fish_fwd.add_fwtable_entry     = my_add_fwtable_entry;
