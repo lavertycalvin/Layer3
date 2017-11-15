@@ -478,7 +478,7 @@ void send_blank_dv_advertisement(){
 void advertise_dv(){
 	//fprintf(stderr, "\nBROADCASTING WITH 0 ADVERTISEMENTS!\n");
 	send_blank_dv_advertisement();
-	fish_scheduleevent(30000, advertise_dv, 0);
+	fish_scheduleevent(24000, advertise_dv, 0);
 }
 
 int find_num_adv(){
@@ -576,7 +576,7 @@ void advertise_full_dv(){
 			send_full_dv_advertisement(my_neighbor_table[i].neigh);
 		}
 	}
-	fish_scheduleevent(23000, advertise_full_dv, 0);//schedule to send again in 30 seconds!
+	fish_scheduleevent(19000, advertise_full_dv, 0);//schedule to send again in 30 seconds!
 }
 
 /* ========================================================= */
