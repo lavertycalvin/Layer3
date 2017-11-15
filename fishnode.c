@@ -722,7 +722,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	/* as per bellardo's notes: */
 	if(l3_header->src == ALL_NEIGHBORS){
 		//fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
-		return 0;
+		return 1;
 	}
 	
 	
@@ -780,7 +780,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 		}
 		else{
 			fprintf(stderr, " YUP!\n");
-			return 0;
+			return 1;
 		}
 	}
 	else{
