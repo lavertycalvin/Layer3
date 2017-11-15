@@ -57,6 +57,7 @@ struct dv_entry{
 	uint8_t  valid;
 	char     state;
 	fnaddr_t dest;
+	fnaddr_t netmask;
 	fnaddr_t next_hop;
 	int 	 metric;
 	uint32_t ttl;

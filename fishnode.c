@@ -40,6 +40,7 @@ int in_neighbor_table(fnaddr_t address){
 	int i = 0;
 	for(; i < my_neighbor_table_size; i++){
 		if(my_neighbor_table[i].valid && (my_neighbor_table[i].neigh == address)){
+			my_neighbor_table[i].ttl = 120;
 			return 1;
 		}
 	}
@@ -81,7 +82,6 @@ int received_previously(fnaddr_t src, uint32_t id){
 
 /* takes in the netmask ALREADY IN HOST ORDER and calculates the prefix length */
 int find_prefix_length(uint32_t netmask){
-	//fprintf(stderr, "Calculating prefix length for %s!!!!\n", fn_ntoa(htonl(netmask)));
 	int length = 0;
 	while(netmask > 0){
 		netmask = netmask >> 1;
@@ -89,31 +89,6 @@ int find_prefix_length(uint32_t netmask){
 	}	
 	//fprintf(stderr, "\tPrefix length is %d\n", length);
 	return length;
-}
-
-/* takes in a destination and metric ALREADY IN HOST ORDER and returns the char of the advertisement type */
-char find_advertisement_type(fnaddr_t dest, uint32_t metric){
-	char type = (char)35; //this is completely random...
-	//fprintf(stderr, "\nTrying to find the advertisement type for metric of %d\n", metric);
-	if(dest == fish_getaddress()){
-		//fprintf(stderr, "\tDest is equal to my address, noting as 'LINK-STATE' (loopback?)\n");
-		type = FISH_FWD_TYPE_LS; 
-	}
-	else if(dest == ALL_NEIGHBORS){
-		//fprintf(stderr, "\tDest is equal to Broadcast,  noting as 'Broadcast'\n");
-		type = FISH_FWD_TYPE_BROADCAST;
-	}
-	else{
-		if(metric == 1){
-			//fprintf(stderr, "\tMetric is 1, designated as connected????\n");
-			type = FISH_FWD_TYPE_NEIGHBOR;
-		}
-		else{
-			//fprintf(stderr, "\tDesignating advertisement as Distance Vector\n");
-			type = FISH_FWD_TYPE_DV;
-		}	
-	}
-	return type;
 }
 
 /* ========================================================= */
@@ -130,27 +105,27 @@ int in_forwarding_table(fnaddr_t dest){
 }
 
 void print_my_forwarding_table(){
-	//fprintf(stdout, ""
-	//"                    CUSTOM FORWARDING TABLE                      \n"
-	//"    C = Connected, L = Loopback, B = Broadcast                   \n"
-	//"  N = Neighbor, D = Distance-Vector, Z = Link-State,             \n"
-	//"                      > = Best                                   \n"
-	//"=================================================================\n"
-	//" T      Destination            Next Hop       Metric   Pkt Cnt   \n"
-	//" - --------------------   -----------------   ------   -------   \n");
+	fprintf(stdout, ""
+	"                    CUSTOM FORWARDING TABLE                      \n"
+	"    C = Connected, L = Loopback, B = Broadcast                   \n"
+	"  N = Neighbor, D = Distance-Vector, Z = Link-State,             \n"
+	"                      > = Best                                   \n"
+	"=================================================================\n"
+	" T      Destination            Next Hop       Metric   Pkt Cnt   \n"
+	" - --------------------   -----------------   ------   -------   \n");
 
 	int i = 0;
 	for(; i < my_forwarding_table_size; i++){
 		if(my_forwarding_table[i].valid){ //only print if valid
-			//fprintf(stdout, " %c%c %16s/%d ", 
-			//	my_forwarding_table[i].type,
-			//	my_forwarding_table[i].is_best,
-			//	fn_ntoa(my_forwarding_table[i].dest),
-			//	my_forwarding_table[i].prefix_length);
-			//fprintf(stdout,	"%19s   %6d    %6d  \n",
-			//	fn_ntoa(my_forwarding_table[i].next_hop),
-			//	my_forwarding_table[i].metric,
-			//	my_forwarding_table[i].pkt_count);
+			fprintf(stdout, " %c%c %16s/%d ", 
+				my_forwarding_table[i].type,
+				my_forwarding_table[i].is_best,
+				fn_ntoa(my_forwarding_table[i].dest),
+				my_forwarding_table[i].prefix_length);
+			fprintf(stdout,	"%19s   %6d    %6d  \n",
+				fn_ntoa(my_forwarding_table[i].next_hop),
+				my_forwarding_table[i].metric,
+				my_forwarding_table[i].pkt_count);
 		}
 	}
 }
@@ -160,10 +135,8 @@ void print_my_forwarding_table(){
  */
 void resize_forwarding_table(){
 	my_forwarding_table_size *= 2;
-	//fprintf(stderr, "We have to resize our forwarding table. Doubling the size to %d entries!\n", my_forwarding_table_size);
 	my_forwarding_table = realloc(my_forwarding_table, sizeof(struct forwarding_table_entry) * my_forwarding_table_size);
 	if(my_forwarding_table == NULL){
-		//fprintf(stderr, "Unable to double the size of the forwarding table, exiting!\n");
 		exit(722);
 	}
 }
@@ -221,16 +194,16 @@ void replace_forwarding_table(struct dv_entry *entry, int current_metric){
 }
 
 void print_my_dv_table(){
-	//fprintf(stdout, "             MY DISTANCE VECTOR ROUTING STATE                 \n"
-  	//                "A = Active, B = Backup, W = Withdrawn, > = In FWD Table       \n"
-	//                "===========================================================   \n"
-	//                "S      Destination            Next Hop       Dist   TTL       \n"
- 	//		"- --------------------   -----------------   ----   ---       \n");
+	fprintf(stdout, "             MY DISTANCE VECTOR ROUTING STATE                 \n"
+  	                "A = Active, B = Backup, W = Withdrawn, > = In FWD Table       \n"
+	                "===========================================================   \n"
+	                "S      Destination            Next Hop       Dist   TTL       \n"
+ 			"- --------------------   -----------------   ----   ---       \n");
 	int i = 0;
 	for(; i < my_dv_table_size; i++){
 		if(my_dv_table[i].valid){
-			//fprintf(stdout, "%c %20s", my_dv_table[i].state, fn_ntoa(my_dv_table[i].dest));
-			//fprintf(stdout, "%20s   %4d  %4d\n", fn_ntoa(my_dv_table[i].next_hop), my_dv_table[i].metric, my_dv_table[i].ttl);
+			fprintf(stdout, "%c %20s", my_dv_table[i].state, fn_ntoa(my_dv_table[i].dest));
+			fprintf(stdout, "%20s   %4d  %4d\n", fn_ntoa(my_dv_table[i].next_hop), my_dv_table[i].metric, my_dv_table[i].ttl);
 		}
 	}
 }
@@ -336,6 +309,7 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 	my_dv_table[i].valid    = 1;
 	my_dv_table[i].state    = state;
 	my_dv_table[i].dest     = dest;
+	my_dv_table[i].netmask  = netmask;
 	my_dv_table[i].next_hop = next_hop;
 	if(metric >= MAX_TTL){
 		my_dv_table[i].metric = MAX_TTL;
@@ -415,7 +389,9 @@ void process_dv_packet(void *dv_frame, fnaddr_t dv_packet_source, int len){
 	 * ----> will handle all management of forwarding table
 	 */
 	if(ntohs(dv->num_adv) == 0){
-		add_neighbor_to_table(dv_packet_source);
+		if(!in_neighbor_table(dv_packet_source)){
+			add_neighbor_to_table(dv_packet_source);
+		}
 	}
 	
 	while(i < ntohs(dv->num_adv)){
@@ -534,7 +510,7 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 			else{
 				fill_this->metric = htonl(my_dv_table[i].metric);
 			}
-			fill_this->netmask = ALL_NEIGHBORS;
+			fill_this->netmask = my_dv_table[i].netmask;
 			
 			//fprintf(stderr, "\n"
 			//		"\tHERES ADVERTISEMENT %d:\n"
@@ -583,16 +559,16 @@ void advertise_full_dv(){
 /* ================ Neighbor Implementation ================ */
 /* ========================================================= */
 void print_my_neighbor_table(){
-       	//fprintf(stdout,"\n" 
-	//	"           NEIGHBOR TABLE         \n"
-	//	" =================================\n"
-	//	"     Neighbor           TTL       \n"
-	//	" ----------------      -----      \n");
+       	fprintf(stdout,"\n" 
+		"           NEIGHBOR TABLE         \n"
+		" =================================\n"
+		"     Neighbor           TTL       \n"
+		" ----------------      -----      \n");
 
        int i = 0;
        for(; i < my_neighbor_table_size; i++){
        		if(my_neighbor_table[i].valid){
-			//fprintf(stdout, "%17s       %4d\n", fn_ntoa(my_neighbor_table[i].neigh), my_neighbor_table[i].ttl);
+			fprintf(stdout, "%17s       %4d\n", fn_ntoa(my_neighbor_table[i].neigh), my_neighbor_table[i].ttl);
 		}
        }
 }
@@ -814,7 +790,7 @@ int my_fish_l3_send(void *l4frame, int len, fnaddr_t dst_addr, uint8_t proto, ui
 	
 	add_id_seen(l3_header->id, fish_getaddress());
 
-	
+	fish_debugframe(FISH_DEBUG_ALL, "Sending this packet", l3_header, 3, len + L3_HEADER_LENGTH, 5);
 	ret = fish_l3.fish_l3_forward(l3frame, len + L3_HEADER_LENGTH);	
 	return ret;
 }
@@ -911,6 +887,7 @@ void *my_remove_fwtable_entry(void *route_key){
 	//fprintf(stderr, "Removing an entry from the forwarding table!\n");
 	/* this is definitely not going to work! */
 	((struct forwarding_table_entry *)(route_key))->valid = 0; 	//mark as invalid
+	
 	num_forwarding_table_entries--;		//decrement the number of entries in the table
 	return ((struct forwarding_table_entry *)(route_key))->user_data;//return the user data stored for this entry
 }
@@ -918,7 +895,7 @@ void *my_remove_fwtable_entry(void *route_key){
 int my_update_fwtable_metric(void *route_key, int new_metric){
 	int update_successful = 1;
 	if(route_key == NULL){
-		//fprintf(stderr, "WTF, this is a null pointer... how can we update?\n");
+		fprintf(stderr, "WTF, this is a null pointer... how can we update?\n");
 		return 0;
 	}
 	/* this is definitely not going to work! */
