@@ -1031,9 +1031,9 @@ int main(int argc, char **argv)
 	 * =================================== 
 	
 	 * set functions to my custom pointers */
-	//fish_l3.fish_l3_send = my_fish_l3_send;
+	fish_l3.fish_l3_send = my_fish_l3_send;
 	fish_l3.fishnode_l3_receive = my_fishnode_l3_receive;
-	//fish_l3.fish_l3_forward = my_fish_l3_forward;
+	fish_l3.fish_l3_forward = my_fish_l3_forward;
 
 	/* custom pointers for advanced functionality */
 	fish_fwd.add_fwtable_entry     = my_add_fwtable_entry;
