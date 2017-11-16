@@ -213,14 +213,12 @@ void resize_dv_table(){
 	
 	my_dv_table = realloc(my_dv_table, my_dv_table_size * sizeof(struct dv_entry));
        	if(my_dv_table == NULL){
-		//fprintf(stderr, "Unable to realloc for dv table of size %d. Exiting...\n", my_dv_table_size);
 		exit(1231);
 	}
 }
 
 
 void update_dv_table(struct dv_entry *entry, int new_metric){
-	//we are already gaurenteed it exists!
 	//fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
 	if(new_metric >= MAX_TTL){
 		//fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
@@ -531,27 +529,64 @@ void send_full_dv_advertisement(fnaddr_t neighbor){
 
 	}
 	//pass to lvl 3
-	if(num_adv_sending == 0){
-		//fprintf(stderr, "ARE WE FAILING BEFORE FREEING NOTHING???\n");
-		//free(l4frame);	
-	}
-	else{
-		//fprintf(stderr, "ARE WE FAILING BEFORE WE SEND THE DV ADVERTISEMETN???\n");
+	if(num_adv_sending != 0){
 		fish_l3.fish_l3_send(neigh_adv, 2 + (num_adv_sending * sizeof(struct dv_adv)), neighbor, L3_PROTO_DV, 1);
-		//fprintf(stderr, "ARE WE FAILING AT THIS POINT????\n");
-		//free(l4frame);
+
 	}
 }
 
+void send_non_poison_adv(){
+	int num_adv_sending = find_num_adv();
+	//fprintf(stderr, "\n\n"
+	//		"======================================\n"
+	//		"SENDING %d advertisements to %s\n"
+	//		"======================================\n\n",
+	//		num_adv_sending, fn_ntoa(neighbor));
+	//malloc for our dv packet
+	void *l4frame = malloc((sizeof(struct dv_adv) * num_adv_sending) + L2_HEADER_LENGTH + L3_HEADER_LENGTH);
+	l4frame += L2_HEADER_LENGTH + L3_HEADER_LENGTH; //move the frame along, thanks a lot!
+        
+	struct dv_packet *neigh_adv = (struct dv_packet *)l4frame;
+	struct dv_adv *fill_this = &neigh_adv->adv_packets;
+	if(neigh_adv == NULL){
+		//fprintf(stderr, "TRYING TO SEND A DV UPDATE AND IT FAILED :( Exiting....\n");
+		exit(2342234);
+	}
+	neigh_adv->num_adv = ntohs(num_adv_sending);	
+	
+ 	int i = 0;
+	int adv_added = 0;
+	for(; i < my_dv_table_size; i++){
+		//only send valid active or backup routes
+		if(my_dv_table[i].valid){
+			fill_this->dest = my_dv_table[i].dest;
+			fill_this->metric = htonl(my_dv_table[i].metric);
+			fill_this->netmask = my_dv_table[i].netmask;
+			
+			adv_added++;
+			fill_this++;
+			if(adv_added >=  num_adv_sending){
+				break;
+			}
+		}
+
+	}
+	//pass to lvl 3
+	if(num_adv_sending != 0){
+		fish_l3.fish_l3_send(neigh_adv, 2 + (num_adv_sending * sizeof(struct dv_adv)), ALL_NEIGHBORS, L3_PROTO_DV, 1);
+
+	}
+}
 /* advertise to our neighbor our routing table on triggered update*/
 void advertise_full_dv(){
-	int i = 0;
-	for(; i < my_neighbor_table_size; i++){
-		if(my_neighbor_table[i].valid){
+	//int i = 0;
+	//for(; i < my_neighbor_table_size; i++){
+		//if(my_neighbor_table[i].valid){
 			//fprintf(stderr, "Sending dv advertisement to neighbor %s\n", fn_ntoa(my_neighbor_table[i].neigh));
-			send_full_dv_advertisement(my_neighbor_table[i].neigh);
-		}
-	}
+		//	send_full_dv_advertisement(my_neighbor_table[i].neigh);
+		//}
+	//}
+	send_non_poison_adv();
 	fish_scheduleevent(19000, advertise_full_dv, 0);//schedule to send again in 30 seconds!
 }
 
@@ -664,8 +699,6 @@ void process_neighbor_packet(void *neigh_frame, fnaddr_t neigh_source, int len){
 		send_neigh_response(neigh_source);
 	}
 	else{
-		//received a response, add to forwarding table????
-		//fprintf(stderr, "\tReceived a Neighbor response from %s\n", fn_ntoa(neigh_source));
 		add_neighbor_to_table(neigh_source);
 	}	
 }
@@ -676,7 +709,7 @@ void timed_neighbor_probe(){
 	 */
 	//fprintf(stderr, "\nSENDING OUT A NEIGHBOR PROBE!\n");
 	send_neigh_request();
-	fish_scheduleevent(30000, timed_neighbor_probe, 0);
+	fish_scheduleevent(26000, timed_neighbor_probe, 0);
 }	
 
 /* ========================================================= */
@@ -689,12 +722,7 @@ int my_fishnode_l3_receive(void *l3frame, int len){
 	uint8_t proto  = l3_header->proto;
 	fnaddr_t src   = l3_header->src;
 	
-	
-	
-	
-	/* as per bellardo's notes: */
 	if(l3_header->src == ALL_NEIGHBORS){
-		//fprintf(stderr, "WE RECEIVED FROM AN 'ALL NEIGHBORS' SOURCE! DROP THIS THING@!!@@\n\n");
 		return 0;
 	}
 	
