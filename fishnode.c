@@ -147,8 +147,6 @@ void resize_forwarding_table(){
 void replace_forwarding_table(struct dv_entry *entry, int current_metric){
 	//look for another entry that is valid in the dv table that matches dest
 	int replaced = 0;
-	//remove the entry from the forwarding table
-
 
 	struct dv_entry *best_backup = NULL;
 	int best_metric = current_metric;
@@ -165,27 +163,25 @@ void replace_forwarding_table(struct dv_entry *entry, int current_metric){
 		}
 	}
 	if(!replaced){
-		//fprintf(stderr, "%s was removed from the forwarding table and there was no backup!\n\n", fn_ntoa(entry->dest));
+		fprintf(stderr, "%s was removed from the forwarding table and there was no backup!\n\n", fn_ntoa(entry->dest));
 		fish_fwd.remove_fwtable_entry(entry->fwd_table_ptr);
 		entry->valid = 0;
 		entry->in_forwarding_table = 0;
 	}
 	else{
-		fish_fwd.remove_fwtable_entry(entry->fwd_table_ptr);
-		entry->in_forwarding_table = 0;
 		if(current_metric != MAX_TTL){
 			//the other metric was made longer but not unreachable
 			entry->state = 'B';
 		}
 		
-		//fprintf(stderr, "\t\t\t%s will replace ", fn_ntoa(best_backup->next_hop));
-		//fprintf(stderr, "%s in the forwarding table ", fn_ntoa(entry->next_hop));
-		//fprintf(stderr, "as next hop for: %s\n\n", fn_ntoa(entry->dest));
+		fprintf(stderr, "\t\t\t%s will replace ", fn_ntoa(best_backup->next_hop));
+		fprintf(stderr, "%s in the forwarding table ", fn_ntoa(entry->next_hop));
+		fprintf(stderr, "as next hop for: %s\n\n", fn_ntoa(entry->dest));
 
 		best_backup->state = 'A';
 		best_backup->in_forwarding_table = 1;
 		best_backup->fwd_table_ptr = fish_fwd.add_fwtable_entry(best_backup->dest, 
-									  32, 
+									  best_backup->netmask, 
 									  best_backup->next_hop, 
 									  best_backup->metric - 1, 
 									  'D', 
@@ -219,24 +215,22 @@ void resize_dv_table(){
 
 
 void update_dv_table(struct dv_entry *entry, int new_metric){
-	//fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
+	fprintf(stderr, "Updating the metric for %s from %d to %d!\n", fn_ntoa(entry->dest), entry->metric, new_metric);
 	if(new_metric >= MAX_TTL){
-		//fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
+		fprintf(stderr, "Withdrawing route for %s!!!!!\n", fn_ntoa(entry->dest));
 		new_metric = MAX_TTL;
 		entry->state = 'W';
 		if(entry->in_forwarding_table){
 			replace_forwarding_table(entry, new_metric - 1);
 		}
-		entry->metric = new_metric;
+		entry->metric = new_metric + 1;
 	}
 	else{
-		entry->metric = new_metric;	
+		entry->metric = new_metric + 1;
 	}
 	if(entry->in_forwarding_table){
-		//update entry in the forwarding table
-		//fprintf(stderr, "Used in the forwarding table, need to update this entry!\n");
+		fish_fwd.update_fwtable_metric(entry->fwd_table_ptr, new_metric + 1);
 	}
-
 }
 
 
@@ -310,7 +304,7 @@ void add_to_dv_table(fnaddr_t dest, fnaddr_t next_hop, int metric, fnaddr_t netm
 	my_dv_table[i].netmask  = netmask;
 	my_dv_table[i].next_hop = next_hop;
 	if(metric >= MAX_TTL){
-		my_dv_table[i].metric = MAX_TTL;
+		my_dv_table[i].metric = MAX_TTL - 1;
 	}
 	else{
 		my_dv_table[i].metric = metric + 1;
